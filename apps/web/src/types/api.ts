@@ -166,6 +166,13 @@ export type ProjectListItem = {
 export type TicketStatus = "open" | "pending_admin" | "pending_employer" | "closed";
 export type TicketPriority = "low" | "normal" | "high";
 
+export type TicketAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+};
+
 export type TicketMessage = {
   id: string;
   author_type: "admin" | "employer" | "system";
@@ -173,6 +180,7 @@ export type TicketMessage = {
   body: string;
   channel: string;
   created_at: string;
+  attachments: TicketAttachment[];
 };
 
 export type TicketListItem = {
@@ -331,6 +339,9 @@ export type SystemStatus = {
   site_url: string;
   pending_jobs: number;
   failed_jobs: number;
+  embedded_worker: boolean;
+  oldest_pending_seconds: number | null;
+  queue_status: "idle" | "draining" | "stalled" | (string & {});
 };
 
 // ---------------------------------------------------------------------------
@@ -367,6 +378,8 @@ export type ServiceQuestionInput = {
 
 export type ServiceItem = {
   id: string;
+  parent_id: string | null;
+  level: number;
   key: string;
   title: string;
   description: string;
@@ -376,6 +389,8 @@ export type ServiceItem = {
   portfolio_text: string;
   portfolio_url: string;
   questions: ServiceQuestion[];
+  children: ServiceItem[];
+  is_group: boolean;
 };
 
 export type ServiceItemInput = {
@@ -428,6 +443,7 @@ export type OrderListItem = {
   id: string;
   category_title: string;
   item_title: string;
+  service_path: string;
   contact_name: string;
   contact_phone: string;
   status: OrderStatus;

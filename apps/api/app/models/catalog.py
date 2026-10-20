@@ -34,6 +34,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 QUESTION_TYPES = ("text", "long_text", "number", "choice", "phone")
+#: Deepest allowed level of the service tree (category -> level 1 -> ... -> 4).
+MAX_SERVICE_DEPTH = 4
 REQUEST_STATUSES = ("new", "contacted", "quoted", "won", "lost", "cancelled")
 
 
@@ -78,17 +80,31 @@ class ServiceCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class ServiceItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A sub service such as «طراحی لوگو»."""
+    """A node of the service tree, e.g. «اپلیکیشن» → «اندروید» → «فروشگاهی».
+
+    A node with children is a *group*: the bot asks the visitor to pick one of
+    them. A node without children is a *leaf*: the bot asks its questions.
+    ``level`` is 1 for direct children of a category and grows downwards; the API
+    refuses to nest deeper than :data:`MAX_SERVICE_DEPTH`.
+    """
 
     __tablename__ = "service_items"
     __table_args__ = (
-        UniqueConstraint("category_id", "key", name="uq_service_items_category_key"),
+        UniqueConstraint("category_id", "parent_id", "key", name="uq_service_items_sibling_key"),
         Index("ix_service_items_category_order", "category_id", "order_index"),
+        Index("ix_service_items_parent_order", "parent_id", "order_index"),
+        CheckConstraint("level >= 1 AND level <= 4", name="level_valid"),
     )
 
     category_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_categories.id", ondelete="CASCADE"), nullable=False
     )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_items.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    level: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     key: Mapped[str] = mapped_column(String(60), nullable=False)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -101,6 +117,14 @@ class ServiceItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     category: Mapped[ServiceCategory] = relationship(back_populates="items")
+    children: Mapped[list[ServiceItem]] = relationship(
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        order_by="ServiceItem.order_index",
+    )
+    parent: Mapped[ServiceItem | None] = relationship(
+        back_populates="children", remote_side="ServiceItem.id"
+    )
     questions: Mapped[list[ServiceQuestion]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
@@ -162,6 +186,10 @@ class ServiceRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     category_title: Mapped[str] = mapped_column(String(120), nullable=False)
     item_title: Mapped[str] = mapped_column(String(120), nullable=False)
+    #: «طراحی اپلیکیشن › اندروید › فروشگاهی» - stable even after a catalog edit.
+    service_path: Mapped[str] = mapped_column(
+        String(500), default="", server_default="", nullable=False
+    )
     contact_name: Mapped[str] = mapped_column(String(160), nullable=False)
     contact_phone: Mapped[str] = mapped_column(String(32), nullable=False)
     #: ``[{"key": ..., "label": ..., "value": ...}]`` - stable, human readable.

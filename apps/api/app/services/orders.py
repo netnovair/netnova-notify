@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import bad_request, not_found
 from app.core.security import utcnow
-from app.models.catalog import ServiceItem, ServiceRequest
+from app.models.catalog import ServiceCategory, ServiceItem, ServiceRequest
 from app.schemas.catalog import RequestUpdate
 from app.services.audit import Actor, AuditService
 
@@ -80,6 +80,29 @@ def validate_answer(item: ServiceItem, question, raw: str) -> tuple[str | None, 
 
 class OrderService:
     @staticmethod
+    def service_path(db: Session, item) -> str:
+        """«دسته › سطح ۱ › سطح ۲» for the order snapshot.
+
+        ``item`` may be an ORM row or a :class:`~app.domain.service_tree.NodeView`;
+        either way the ancestors are rebuilt from the database so a renamed or
+        deleted parent can never fabricate a path.
+        """
+        titles = [item.title]
+        parent_id = getattr(item, "parent_id", None)
+        seen: set[uuid.UUID] = set()
+        while parent_id is not None and parent_id not in seen and len(titles) < 6:
+            seen.add(parent_id)
+            parent = db.get(ServiceItem, parent_id)
+            if parent is None:
+                break
+            titles.append(parent.title)
+            parent_id = parent.parent_id
+        category = db.get(ServiceCategory, item.category_id) if item.category_id else None
+        if category is not None and category.title not in titles:
+            titles.append(category.title)
+        return " › ".join(reversed(titles))
+
+    @staticmethod
     def get(db: Session, request_id: uuid.UUID) -> ServiceRequest:
         request = db.get(ServiceRequest, request_id)
         if request is None:
@@ -92,6 +115,7 @@ class OrderService:
         *,
         category_id: uuid.UUID | None,
         item: ServiceItem,
+        category_title: str,
         contact_name: str,
         contact_phone: str,
         answers: list[dict],
@@ -99,6 +123,7 @@ class OrderService:
         telegram_username: str | None,
         telegram_id: int | None,
         actor: Actor,
+        service_path: str = "",
     ) -> ServiceRequest:
         name = (contact_name or "").strip()
         phone = normalize_phone(contact_phone)
@@ -113,8 +138,9 @@ class OrderService:
             category_id=category_id,
             item_id=item.id,
             telegram_user_id=telegram_user_id,
-            category_title=item.category.title,
+            category_title=category_title,
             item_title=item.title,
+            service_path=service_path,
             contact_name=name[:160],
             contact_phone=phone,
             answers=answers,
@@ -134,7 +160,7 @@ class OrderService:
             action="order.created",
             entity_type="service_request",
             entity_id=request.id,
-            context={"item": item.title, "category": item.category.title},
+            context={"item": item.title, "category": category_title},
             now=now,
         )
         return request

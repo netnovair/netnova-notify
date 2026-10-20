@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/Badge";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ErrorState, InlineAlert, LoadingState } from "@/components/ui/States";
 import { api, errorMessage } from "@/lib/api";
-import { formatAmount, formatDateTime, formatNumber, formatRelative } from "@/lib/format";
+import { formatAge, formatAmount, formatDateTime, formatNumber, formatRelative } from "@/lib/format";
 import { useApiData } from "@/lib/hooks";
 import type { Currency, Dashboard, SystemStatus } from "@/types/api";
 
@@ -125,10 +125,20 @@ export default function DashboardPage() {
               با نشان «Mock» مشخص می شوند.
             </InlineAlert>
           ) : null}
-          {system.worker.status !== "online" ? (
+          {system.queue_status === "stalled" ? (
+            <InlineAlert tone="danger">
+              {formatNumber(system.pending_jobs)} کار در صف برای ارسال تلگرام منتظر است، اما
+              هیچ پردازشگری آن را برنمی دارد
+              {system.oldest_pending_seconds !== null
+                ? ` (قدیمی ترین کار: ${formatAge(system.oldest_pending_seconds)})`
+                : ""}
+              . تا زمانی که پردازشگر اجرا نشود، اطلاعیه ها و یادآوری پرداخت ها ارسال نمی
+              شوند. در تنظیمات، وضعیت Worker و دستور اجرا آمده است.
+            </InlineAlert>
+          ) : system.worker.status !== "online" && !system.embedded_worker ? (
             <InlineAlert tone="warning">
-              Worker در حال اجرا نیست یا گزارش تازه ای ندارد. اطلاعیه های در صف و یادآوری
-              پرداخت ها تا اجرای Worker ارسال نمی شوند.
+              Worker در حال اجرا نیست یا گزارش تازه ای ندارد. اگر کار جدیدی در صف قرار
+              بگیرد، تا اجرای Worker (یا اجرای دوره ای GitHub Actions) ارسال نمی شود.
             </InlineAlert>
           ) : null}
           {system.failed_jobs > 0 ? (

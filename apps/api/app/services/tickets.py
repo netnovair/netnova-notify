@@ -7,12 +7,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.errors import conflict, not_found
+from app.core.errors import bad_request, conflict, not_found
 from app.core.security import utcnow
+from app.domain.attachments import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    AttachmentError,
+    AttachmentInput,
+    sha256_hex,
+    validate_attachment,
+)
 from app.domain.enums import JobKind, TicketAuthorType, TicketStatus
 from app.models.project import Project
 from app.models.telegram import ProjectMember
-from app.models.ticket import Ticket, TicketMessage
+from app.models.ticket import Ticket, TicketAttachment, TicketMessage
 from app.repositories.jobs import JobRepository
 from app.services.audit import Actor, AuditService
 
@@ -38,6 +45,65 @@ class TicketService:
         if len(text) > limit:
             raise conflict(f"{field} بیش از حد طولانی است (حداکثر {limit} کاراکتر).")
         return text
+
+    @staticmethod
+    def _prepare_body(body: str, *, has_attachments: bool) -> str:
+        text = (body or "").strip()
+        if not text:
+            if has_attachments:
+                return "تصویر پیوست"
+            raise conflict("متن پیام نمی تواند خالی باشد.")
+        if len(text) > BODY_LIMIT:
+            raise conflict(f"متن پیام بیش از حد طولانی است (حداکثر {BODY_LIMIT} کاراکتر).")
+        return text
+
+    @staticmethod
+    def _prepare_attachments(
+        attachments: list[AttachmentInput] | None,
+    ) -> list[tuple[bytes, str, str]]:
+        """Validate every upload before anything is written to the database."""
+        if not attachments:
+            return []
+        if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+            raise bad_request(
+                f"حداکثر {MAX_ATTACHMENTS_PER_MESSAGE} تصویر در هر پیام ارسال کنید.",
+                code="too_many_attachments",
+            )
+        prepared: list[tuple[bytes, str, str]] = []
+        for item in attachments:
+            try:
+                content_type, filename = validate_attachment(
+                    item.data, filename=item.filename, declared_type=item.content_type
+                )
+            except AttachmentError as exc:
+                raise bad_request(str(exc), code="invalid_attachment") from exc
+            prepared.append((item.data, filename, content_type))
+        return prepared
+
+    @staticmethod
+    def _store_attachments(
+        db: Session,
+        *,
+        ticket_id: uuid.UUID,
+        message: TicketMessage,
+        prepared: list[tuple[bytes, str, str]],
+        now: datetime,
+    ) -> None:
+        for data, filename, content_type in prepared:
+            db.add(
+                TicketAttachment(
+                    ticket_id=ticket_id,
+                    message=message,
+                    filename=filename[:120],
+                    content_type=content_type,
+                    size_bytes=len(data),
+                    sha256=sha256_hex(data),
+                    data=data,
+                    created_at=now,
+                )
+            )
+        if prepared:
+            db.flush()
 
     @staticmethod
     def get(db: Session, ticket_id: uuid.UUID) -> Ticket:
@@ -76,12 +142,14 @@ class TicketService:
         actor: Actor,
         channel: str = "web",
         priority: str = "normal",
+        attachments: list[AttachmentInput] | None = None,
     ) -> Ticket:
         if project.archived_at is not None:
             raise conflict("پروژه بایگانی شده است و تیکت جدید نمی پذیرد.")
         now = utcnow()
         clean_subject = TicketService._clean(subject, limit=SUBJECT_LIMIT, field="موضوع")
-        clean_body = TicketService._clean(body, limit=BODY_LIMIT, field="متن پیام")
+        prepared = TicketService._prepare_attachments(attachments)
+        clean_body = TicketService._prepare_body(body, has_attachments=bool(prepared))
         from_admin = created_by_type == TicketAuthorType.ADMIN.value
         ticket = Ticket(
             project_id=project.id,
@@ -103,8 +171,10 @@ class TicketService:
         )
         db.add(ticket)
         db.flush()
+        # Assigning the relationship (not only the FK) keeps `ticket.messages`
+        # in sync even when that collection was already loaded in this session.
         message = TicketMessage(
-            ticket_id=ticket.id,
+            ticket=ticket,
             author_type=created_by_type,
             author_admin_id=admin_id,
             author_member_id=member.id if member else None,
@@ -115,6 +185,9 @@ class TicketService:
         )
         db.add(message)
         db.flush()
+        TicketService._store_attachments(
+            db, ticket_id=ticket.id, message=message, prepared=prepared, now=now
+        )
         AuditService.record(
             db,
             actor=actor,
@@ -149,9 +222,11 @@ class TicketService:
         member: ProjectMember | None = None,
         actor: Actor,
         channel: str = "web",
+        attachments: list[AttachmentInput] | None = None,
     ) -> Ticket:
         now = utcnow()
-        clean_body = TicketService._clean(body, limit=BODY_LIMIT, field="متن پیام")
+        prepared = TicketService._prepare_attachments(attachments)
+        clean_body = TicketService._prepare_body(body, has_attachments=bool(prepared))
         if ticket.status == TicketStatus.CLOSED.value:
             # Replying reopens the thread; this is explicit and audited.
             ticket.status = (
@@ -166,7 +241,7 @@ class TicketService:
             ticket.status = TicketStatus.PENDING_ADMIN.value
 
         message = TicketMessage(
-            ticket_id=ticket.id,
+            ticket=ticket,
             author_type=author_type,
             author_admin_id=admin_id,
             author_member_id=member.id if member else None,
@@ -176,6 +251,10 @@ class TicketService:
             created_at=now,
         )
         db.add(message)
+        db.flush()
+        TicketService._store_attachments(
+            db, ticket_id=ticket.id, message=message, prepared=prepared, now=now
+        )
         ticket.last_message_at = now
         ticket.updated_at = now
         if author_type == TicketAuthorType.ADMIN.value:

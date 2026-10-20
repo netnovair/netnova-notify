@@ -24,7 +24,7 @@ from app.adapters.telegram.base import TelegramAdapter, TelegramError
 from app.adapters.telegram.formatting import html_escape, inline_keyboard, truncate
 from app.core.config import Settings
 from app.core.security import utcnow
-from app.models.catalog import OrderSession, ServiceCategory, ServiceItem
+from app.models.catalog import OrderSession, ServiceItem
 from app.models.telegram import TelegramUser
 from app.services.catalog import CatalogService
 from app.services.orders import OrderService, fa_digits, normalize_phone, validate_answer
@@ -145,13 +145,16 @@ class OrderFlow:
         if data.startswith("op:") and data[3:].isdigit():
             self._show_portfolio(int(data[3:]))
             return True
-        if data.startswith("oi:") and data.count(":") == 2:
-            _, _, rest = data.partition(":")
-            category_index, _, item_index = rest.partition(":")
-            if category_index.isdigit() and item_index.isdigit():
-                self._start_item(int(category_index), int(item_index))
+        if data.startswith("oi:"):
+            # oi:<category index>:<path of child positions, e.g. 2:0:1>
+            parts = data.split(":")
+            if len(parts) >= 3 and all(part.isdigit() for part in parts[1:]):
+                self._descend(int(parts[1]), [int(part) for part in parts[2:]])
                 return True
             return False
+        if data == "oup":
+            self._go_up()
+            return True
         if data.startswith("oq:") and data.count(":") == 2:
             _, _, rest = data.partition(":")
             question_index, _, option_index = rest.partition(":")
@@ -207,33 +210,58 @@ class OrderFlow:
         return False
 
     # ------------------------------------------------------------------
-    # Catalog navigation
+    # Catalog navigation (any depth)
     # ------------------------------------------------------------------
-    def _show_category(self, index: int) -> None:
+    @staticmethod
+    def _active_children(item) -> list:
+        # NodeView children are already filtered by the catalog service.
+        return [child for child in item.children if child.is_active]
+
+    def _category_at(self, index: int):
         categories = CatalogService.public_tree(self.db)
         if not 0 <= index < len(categories):
+            return None
+        return categories[index]
+
+    def _node_at(self, root, path: list[int]):
+        """Resolve a path of positions inside the active tree of one category."""
+        node = root
+        for position in path:
+            children = self._active_children(node)
+            if not 0 <= position < len(children):
+                return None
+            node = children[position]
+        return node
+
+    def _show_category(self, index: int) -> None:
+        category = self._category_at(index)
+        if category is None:
             self._send("این دسته در دسترس نیست. لطفا دوباره «ثبت سفارش» را بزنید.")
             return
-        category = categories[index]
         lines = [f"<b>{html_escape(category.title)}</b>"]
         if category.description:
             lines.append(html_escape(category.description))
         lines.append("")
         lines.append("کدام خدمت را نیاز دارید؟")
         rows: list[list[tuple[str, str]]] = [
-            [(item.title, f"oi:{index}:{position}")] for position, item in enumerate(category.items)
+            [(self._node_label(item), f"oi:{index}:{position}")]
+            for position, item in enumerate(category.items)
         ]
         if category.show_portfolio:
             rows.append([("مشاهده نمونه کارها", f"op:{index}")])
         rows.append([("بازگشت به دسته ها", "o:home")])
         self._send(truncate("\n".join(lines)), inline_keyboard(rows))
 
+    @staticmethod
+    def _node_label(item: ServiceItem) -> str:
+        # A group ends with an ellipsis so visitors know another step follows.
+        return f"{item.title} …" if item.children else item.title
+
     def _show_portfolio(self, index: int) -> None:
-        categories = CatalogService.public_tree(self.db)
-        if not 0 <= index < len(categories):
+        category = self._category_at(index)
+        if category is None:
             self._send("این دسته در دسترس نیست.")
             return
-        category = categories[index]
         text = category.portfolio_text.strip() or "برای این بخش نمونه کاری ثبت نشده است."
         self._send_portfolio_entry(
             title=f"نمونه کارهای {category.title}",
@@ -242,7 +270,7 @@ class OrderFlow:
             keyboard=inline_keyboard([[("بازگشت", f"oc:{index}")]]),
         )
 
-    def _resolve_item(self, session: OrderSession) -> tuple[ServiceCategory, ServiceItem] | None:
+    def _resolve_item(self, session: OrderSession):
         try:
             item_id = uuid.UUID(str(session.payload.get("item_id")))
         except (ValueError, TypeError):
@@ -253,28 +281,154 @@ class OrderFlow:
         category = item.category
         if category is None or not category.is_active:
             return None
-        return category, item
+        return (
+            CatalogService.category_detail(self.db, category, include_inactive=False),
+            CatalogService.node_detail(self.db, item, include_inactive=False),
+        )
 
-    def _start_item(self, category_index: int, item_index: int) -> None:
-        categories = CatalogService.public_tree(self.db)
-        if not 0 <= category_index < len(categories):
+    def _descend(self, category_index: int, path: list[int]) -> None:
+        """One tap on ``oi:<category>:<path>``.
+
+        If the node has children the visitor is asked to choose one; a leaf
+        starts the questions. The path is re-resolved against the live catalog,
+        so a keyboard from an older message cannot address something else.
+        """
+        category = self._category_at(category_index)
+        if category is None or not category.items:
             self._send("این خدمت در دسترس نیست. لطفا دوباره «ثبت سفارش» را بزنید.")
             return
-        category = categories[category_index]
-        if not 0 <= item_index < len(category.items):
-            self._send("این زیرخدمت در دسترس نیست. لطفا دوباره انتخاب کنید.")
+        node = self._node_at(category.items[path[0]], path[1:]) if path else None
+        if node is None:
+            self._send("این گزینه دیگر در دسترس نیست. لطفا از فهرست فعلی انتخاب کنید.")
+            self._show_category(category_index)
             return
-        item = category.items[item_index]
+        children = self._active_children(node)
+        trail = self._trail(category, path)
+        if children:
+            self._show_node_children(category_index, path, node, children, trail)
+            return
+        self._start_leaf(category_index, path, category, node, trail)
+
+    def _trail(self, category, path: list[int]) -> list:
+        chain: list[ServiceItem] = []
+        node: ServiceItem | None = category.items[path[0]] if path else None
+        if node is not None:
+            chain.append(node)
+            for position in path[1:]:
+                children = self._active_children(node)
+                if not 0 <= position < len(children):
+                    break
+                node = children[position]
+                chain.append(node)
+        return chain
+
+    def _show_node_children(
+        self,
+        category_index: int,
+        path: list[int],
+        node,
+        children: list,
+        trail: list,
+    ) -> None:
+        lines = [f"<b>{html_escape(node.title)}</b>"]
+        if node.description:
+            lines.append(html_escape(node.description))
+        lines.append("")
+        lines.append(f"<i>{html_escape(self._breadcrumb(trail))}</i>")
+        lines.append("")
+        lines.append("کدام گزینه به نیاز شما نزدیک تر است؟")
+        rows: list[list[tuple[str, str]]] = [
+            [
+                (
+                    self._node_label(child),
+                    f"oi:{category_index}:{':'.join(str(p) for p in [*path, index])}",
+                )
+            ]
+            for index, child in enumerate(children)
+        ]
+        rows.append([("مرحله قبل", "oup"), ("لغو سفارش", "ox")])
+        self._send(truncate("\n".join(lines)), inline_keyboard(rows))
+
+    def _go_up(self) -> None:
+        """Walk one level up inside the current category."""
+        session = self._session()
+        if session is None:
+            self.start()
+            return
+        category_index = session.payload.get("category_index")
+        path = list(session.payload.get("path") or [])
+        if category_index is None:
+            self.start()
+            return
+        category_index = int(category_index)
+        category = self._category_at(category_index)
+        if category is None or not path:
+            self.start()
+            return
+        parent_path = path[:-1]
+        # The visitor is now browsing, not answering: drop the half-finished
+        # leaf so a stale answer can never be attached to another service.
+        self._remember_browse(category_index, parent_path)
+        if not parent_path:
+            self._show_category(category_index)
+            return
+        parent = self._node_at(category.items[parent_path[0]], parent_path[1:])
+        if parent is None:
+            self._show_category(category_index)
+            return
+        children = self._active_children(parent)
+        node = self._node_at(category.items[path[0]], path[1:])
+        if node is not None and len(children) <= 1:
+            # With a single child there is nothing to choose; keep walking up.
+            session.payload = {**session.payload, "path": parent_path}
+            self.db.flush()
+            self._go_up()
+            return
+        self._show_node_children(
+            category_index, parent_path, parent, children, self._trail(category, parent_path)
+        )
+
+    def _remember_browse(self, category_index: int, path: list[int]) -> None:
+        """Persist the level the visitor is looking at, outside the leaf flow."""
+        session = self._session()
+        if session is None:
+            return
+        payload = {**session.payload, "category_index": category_index, "path": path}
+        for stale in ("item_id", "answers", "question_index", "trail"):
+            payload.pop(stale, None)
+        self._save(step="browse", payload=payload)
+
+    @staticmethod
+    def _breadcrumb(trail: list) -> str:
+        return " › ".join(item.title for item in trail)
+
+    def _start_leaf(
+        self,
+        category_index: int,
+        path: list[int],
+        category,
+        item,
+        trail: list,
+    ) -> None:
         payload = {
             "category_id": str(category.id),
+            "category_index": category_index,
+            "path": path,
+            "trail": [node.title for node in trail[:-1]],
             "item_id": str(item.id),
             "answers": [],
             "question_index": 0,
             "contact_name": self.user.contact_name or "",
             "contact_phone": self.user.contact_phone or "",
         }
+        trailing = self._breadcrumb(trail[:-1]) if len(trail) > 1 else ""
+        lines = [f"<b>{html_escape(item.title)}</b>"]
+        if trailing:
+            lines.append(f"<i>{html_escape(trailing)}</i>")
         if item.description:
-            self._send(f"<b>{html_escape(item.title)}</b>\n\n{html_escape(item.description)}")
+            lines.append("")
+            lines.append(html_escape(item.description))
+        self._send(truncate("\n".join(lines)))
 
         if not self.user.contact_name:
             self._save(step="contact_name", payload=payload)
@@ -476,11 +630,13 @@ class OrderFlow:
         resolved = self._resolve_item(session)
         item_title = resolved[1].title if resolved else "—"
         category_title = resolved[0].title if resolved else "—"
+        path_titles = list(session.payload.get("trail") or [])
+        trail_text = " › ".join([*path_titles, item_title]) if path_titles else item_title
         lines = [
             "<b>بازبینی سفارش</b>",
             "",
             f"دسته: {html_escape(category_title)}",
-            f"خدمت: {html_escape(item_title)}",
+            f"خدمت: {html_escape(trail_text)}",
             f"نام: {html_escape(str(session.payload.get('contact_name', '')))}",
             f"تماس: {html_escape(str(session.payload.get('contact_phone', '')))}",
             "",
@@ -523,6 +679,8 @@ class OrderFlow:
                 self.db,
                 category_id=category.id,
                 item=item,
+                category_title=category.title,
+                service_path=OrderService.service_path(self.db, item),
                 contact_name=str(session.payload.get("contact_name", "")),
                 contact_phone=str(session.payload.get("contact_phone", "")),
                 answers=list(session.payload.get("answers", [])),
@@ -558,7 +716,7 @@ class OrderFlow:
             return
         lines = [
             "<b>سفارش جدید</b>",
-            f"خدمت: {html_escape(request.item_title)}",
+            f"خدمت: {html_escape(request.service_path or request.item_title)}",
             f"دسته: {html_escape(request.category_title)}",
             f"نام: {html_escape(request.contact_name)}",
             f"تماس: <code>{html_escape(request.contact_phone)}</code>",

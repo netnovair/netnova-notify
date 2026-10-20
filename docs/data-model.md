@@ -39,7 +39,8 @@ Notes:
 - `AUDIT_LOGS.project_id` is `ON DELETE SET NULL`, so deleting a project (demo cleanup or
   an explicit admin action) keeps the audit history; there is no update/delete API for
   audit rows.
-- `TICKETS` cascade with their project and `TICKET_MESSAGES` with their ticket;
+- `TICKETS` cascade with their project, `TICKET_MESSAGES` with their ticket and
+  `TICKET_ATTACHMENTS` with their message;
   `TELEGRAM_CONVERSATIONS` are keyed by user + project and expire automatically.
 
 ## 2. Tables
@@ -153,7 +154,15 @@ in `telegram_users`; this table only adds destinations for other providers.
 - `ticket_messages`: `ticket_id` (cascade), `author_type` (`admin|employer|system`),
   optional `author_admin_id`/`author_member_id` (SET NULL), `author_label` (display
   snapshot), `body`, `channel` (`web|telegram`), `created_at`. Index on
-  `(ticket_id, created_at)`.
+  `(ticket_id, created_at)`. A message without text but with an image stores
+  «تصویر پیوست» as its body.
+- `ticket_attachments`: `ticket_id` and `message_id` (both cascade), `filename`,
+  `content_type` (`image/jpeg|png|webp|gif`), `size_bytes` (1 byte – 5 MB, checked by
+  the database), `sha256`, `data` (bytea) and `created_at`. Indexes on
+  `(ticket_id, created_at)` and `message_id`. Bytes live in PostgreSQL on purpose:
+  free hosts have an ephemeral disk and object storage is a paid dependency. The
+  content type is derived from magic bytes, so SVG and other executable documents
+  are rejected; downloads are admin-only with `nosniff` and `no-store`.
 - `telegram_conversations`: pending multi-step input keyed by
   `(telegram_user_id, project_id)`, with `step`, JSONB `payload`, `expires_at` and
   `completed`. This keeps ticket ids out of callback data and expires stale flows.
@@ -359,8 +368,14 @@ Keys: `worker_heartbeat` (`{hostname, started_at, last_seen_at}`), `telegram_las
 
 ### `service_items`
 
-Sub services. `category_id` cascades on delete; `unique (category_id, key)`; same display
-columns as the category plus `portfolio_*`. Index `(category_id, order_index)`.
+Sub services, nested up to four levels through the self-reference `parent_id`
+(`ON DELETE CASCADE`). Same display columns as the category plus `portfolio_*` and
+`level` (1–4, also enforced by the `level_valid` check constraint). Sibling keys are
+unique: `UNIQUE (category_id, parent_id, key)` (PostgreSQL treats `NULL` parents as
+distinct, so the key is also checked in the service layer). Index
+`(parent_id, order_index)`. A node with children is a group: the bot lists its children
+instead of asking the node's own questions, and deleting it is blocked while any node
+in its subtree has orders.
 
 ### `service_questions`
 
@@ -385,6 +400,7 @@ columns as the category plus `portfolio_*`. Index `(category_id, order_index)`.
 | `category_id`, `item_id` | uuid | FK, `ON DELETE SET NULL` |
 | `telegram_user_id` | uuid | FK, `ON DELETE SET NULL` |
 | `category_title`, `item_title` | varchar(120) | snapshot at submit time |
+| `service_path` | varchar(500) | «دسته › سطح ۱ › سطح ۲» snapshot at submit time |
 | `contact_name`, `contact_phone` | varchar | not null |
 | `answers` | jsonb | `[{key,label,value}]` snapshot |
 | `status` | varchar(20) | `new`, `contacted`, `quoted`, `won`, `lost`, `cancelled` |
@@ -414,8 +430,10 @@ Expired sessions are dropped on the next message. It is intentionally separate f
 6. Delivered attempts are immutable; retries create new attempt rows.
 7. Demo rows (`is_demo`) are excluded from operational conclusions and clearly labelled.
 8. Only active categories with at least one active sub service appear in the bot menu.
-9. A category or sub service with orders cannot be deleted; it can be deactivated.
-10. A submitted order keeps its own title/answer snapshot; catalog edits never rewrite it.
+9. A category or sub service with orders cannot be deleted; it can be deactivated;
+   deletion is refused if any node of the subtree has orders. Depth never exceeds 4.
+10. A submitted order keeps its own title/answer/path snapshot; catalog edits never
+    rewrite it.
 11. `telegram_users.contact_name/contact_phone` are the single identity record reused by
     every later order of the same Telegram user.
 
@@ -426,8 +444,10 @@ Expired sessions are dropped on the next message. It is intentionally separate f
 - Check for drift in development: `alembic check`.
 - Never edit an applied migration; add a new revision.
 - The initial revision is `a182707c5525_initial_schema.py`.
-- Catalog/order chain: `220daa4e4a31` (catalog, orders, order sessions, bot menu state)
-  then `f47e1ad75e31` (portfolio image URL). Current head: `f47e1ad75e31`.
+- Catalog/order chain: `220daa4e4a31` (catalog, orders, order sessions, bot menu state),
+  `f47e1ad75e31` (portfolio image URL), `941334b4b0c1` (multi-level service tree and
+  `service_requests.service_path`), `d6436b17e6e9` (ticket image attachments).
+  Current head: `d6436b17e6e9`.
 - CI applies migrations from an empty database before running tests, proving the
   migration chain works.
 

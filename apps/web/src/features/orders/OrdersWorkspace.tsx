@@ -102,7 +102,7 @@ function OrderDetailModal({
             <div className="rounded-xl border border-line-soft p-3">
               <p className="text-[10px] text-muted">خدمت</p>
               <p className="mt-1 text-xs font-medium">
-                {data.category_title} · {data.item_title}
+                {data.service_path || `${data.category_title} · ${data.item_title}`}
               </p>
             </div>
             <div className="rounded-xl border border-line-soft p-3">
@@ -332,7 +332,9 @@ export function OrdersWorkspace() {
                   </td>
                   <td className="px-3 py-2.5">
                     <span className="block">{order.item_title}</span>
-                    <span className="text-[10px] text-muted">{order.category_title}</span>
+                    <span className="text-[10px] text-muted">
+                      {order.service_path || order.category_title}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5" dir="ltr">
                     {order.contact_phone}

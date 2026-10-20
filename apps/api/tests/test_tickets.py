@@ -123,3 +123,156 @@ def test_admin_can_open_ticket_for_project(admin_client: TestClient) -> None:
     assert body["created_by_type"] == "admin"
     assert body["status"] == "pending_employer"
     assert body["priority"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# Image attachments
+# ---------------------------------------------------------------------------
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\x00\x00\x00\x02\x00\x01\x54"
+    b"\xa2O^\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def test_admin_can_attach_images_to_a_ticket(admin_client: TestClient) -> None:
+    project = create_project(admin_client)
+    ticket = admin_client.post(
+        "/api/v1/tickets",
+        json={
+            "project_id": project["id"],
+            "subject": "اسکرین شات مشکل",
+            "body": "تصویر خطا را ببینید.",
+        },
+    ).json()
+
+    upload = admin_client.post(
+        f"/api/v1/tickets/{ticket['id']}/attachments",
+        data={"body": "این هم تصویر خطا"},
+        files=[("files", ("error-shot.png", PNG_BYTES, "image/png"))],
+    )
+    assert upload.status_code == 200, upload.text
+    message = upload.json()["messages"][-1]
+    assert message["author_type"] == "admin"
+    assert message["body"] == "این هم تصویر خطا"
+    assert len(message["attachments"]) == 1
+    attachment = message["attachments"][0]
+    assert attachment["content_type"] == "image/png"
+    assert attachment["filename"] == "error-shot.png"
+    assert attachment["size_bytes"] == len(PNG_BYTES)
+    # The stored bytes are never inlined into the JSON payload.
+    assert "data" not in attachment
+
+    download = admin_client.get(f"/api/v1/tickets/attachments/{attachment['id']}")
+    assert download.status_code == 200
+    assert download.content == PNG_BYTES
+    assert download.headers["content-type"] == "image/png"
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert "no-store" in download.headers["cache-control"]
+
+    # Anything that is not a raster image is rejected before it reaches the DB.
+    rejected = admin_client.post(
+        f"/api/v1/tickets/{ticket['id']}/attachments",
+        files=[
+            (
+                "files",
+                ("payload.svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml"),
+            )
+        ],
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "invalid_attachment"
+
+    too_big = admin_client.post(
+        f"/api/v1/tickets/{ticket['id']}/attachments",
+        files=[
+            (
+                "files",
+                ("huge.png", PNG_BYTES + b"0" * (5 * 1024 * 1024), "image/png"),
+            )
+        ],
+    )
+    assert too_big.status_code == 400
+    assert too_big.json()["error"]["code"] == "invalid_attachment"
+
+    # An image-only reply is allowed; the stored body explains the content.
+    image_only = admin_client.post(
+        f"/api/v1/tickets/{ticket['id']}/attachments",
+        files=[("files", ("second.png", PNG_BYTES, "image/png"))],
+    )
+    assert image_only.status_code == 200, image_only.text
+    assert image_only.json()["messages"][-1]["body"] == "تصویر پیوست"
+
+
+def test_attachment_endpoint_requires_admin(client: TestClient) -> None:
+    assert (
+        client.get("/api/v1/tickets/attachments/00000000-0000-0000-0000-000000000000").status_code
+        == 401
+    )
+
+
+def test_employer_sends_photo_in_ticket_conversation(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    _project_with_employer(admin_client, 910004)
+
+    telegram_update(admin_client, telegram_id=910004, callback_data="0:newticket")
+    telegram_update(admin_client, telegram_id=910004, text="خطای صفحه پرداخت")
+    telegram_update(
+        admin_client,
+        telegram_id=910004,
+        text="تصویر خطا را فرستادم.",
+        photo=True,
+    )
+    assert "تیکت شما ثبت شد" in last_message(mock_adapter)["text"]
+    # The largest size was requested, not the thumbnail.
+    assert mock_adapter.downloads[-1]["file_id"] == "mock-photo-large"
+
+    ticket = admin_client.get("/api/v1/tickets").json()["items"][0]
+    detail = admin_client.get(f"/api/v1/tickets/{ticket['id']}").json()
+    first = detail["messages"][0]
+    assert first["channel"] == "telegram"
+    assert first["body"] == "تصویر خطا را فرستادم."
+    assert first["attachments"][0]["content_type"] == "image/png"
+
+    # Replying with an image alone is accepted and keeps the thread moving.
+    telegram_update(admin_client, telegram_id=910004, callback_data="0:treply:0")
+    assert "پاسخ خود را" in last_message(mock_adapter)["text"]
+    telegram_update(admin_client, telegram_id=910004, photo=True)
+    assert "پاسخ شما ثبت شد" in last_message(mock_adapter)["text"]
+    detail = admin_client.get(f"/api/v1/tickets/{ticket['id']}").json()
+    assert detail["messages"][-1]["body"] == "تصویر پیوست"
+    assert len(detail["messages"][-1]["attachments"]) == 1
+
+    # Ticket images are forwarded to Telegram as real uploads when an alert is
+    # sent; the test environment has no admin chat id, so the helper is checked
+    # directly instead of through the worker's settings.
+    from types import SimpleNamespace
+
+    from app.adapters.telegram.mock import MockTelegramAdapter
+    from app.worker.handlers import _forward_attachments
+
+    media_adapter = MockTelegramAdapter()
+    _forward_attachments(
+        media_adapter,
+        555,
+        SimpleNamespace(
+            attachments=[
+                SimpleNamespace(
+                    id="a1", data=PNG_BYTES, filename="shot.png", content_type="image/png"
+                )
+            ]
+        ),
+    )
+    assert media_adapter.sent[-1]["chat_id"] == 555
+    assert media_adapter.sent[-1]["media"]["filename"] == "shot.png"
+
+
+def test_photo_without_ticket_conversation_is_explained(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    _project_with_employer(admin_client, 910005)
+    telegram_update(admin_client, telegram_id=910005, photo=True)
+    message = last_message(mock_adapter)["text"]
+    assert "برای ارسال تصویر" in message

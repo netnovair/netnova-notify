@@ -29,6 +29,11 @@ from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.rate_limit import rate_limiter
 from app.core.security import normalize_license_code, utcnow
+from app.domain.attachments import (
+    ALLOWED_IMAGE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    AttachmentInput,
+)
 from app.domain.features import enabled_features
 from app.domain.jalali import format_jalali_date
 from app.domain.menu import (
@@ -118,7 +123,11 @@ class TelegramBotService:
             return
         chat_id = int(chat["id"])
         user = self._upsert_user(sender)
-        text = (message.get("text") or "").strip()
+        text = (message.get("text") or message.get("caption") or "").strip()
+        image = self._extract_image(message)
+        if image is not None and not text.startswith("/"):
+            self._handle_image_message(user, chat_id, image, caption=text)
+            return
         if not text:
             return
 
@@ -166,6 +175,57 @@ class TelegramBotService:
             "برای مشاهده منو /start را بزنید.",
             inline_keyboard([[("ثبت سفارش", "o:home"), ("راهنما", "help")]]),
         )
+
+    @staticmethod
+    def _extract_image(message: dict) -> tuple[str, str, str] | None:
+        """Return ``(file_id, filename, content_type)`` for a sent image.
+
+        Telegram delivers ordinary photos in several sizes (ascending); the last
+        one is the largest. Images sent "as file" arrive as a document and are
+        accepted only when the declared MIME type is a safe raster format.
+        """
+        photos = message.get("photo")
+        if isinstance(photos, list) and photos:
+            file_id = (photos[-1] or {}).get("file_id")
+            if file_id:
+                return str(file_id), "telegram-photo.jpg", "image/jpeg"
+        document = message.get("document") or {}
+        mime = str(document.get("mime_type") or "")
+        file_id = document.get("file_id")
+        if file_id and mime in ALLOWED_IMAGE_TYPES:
+            return str(file_id), str(document.get("file_name") or "telegram-file"), mime
+        return None
+
+    def _handle_image_message(
+        self,
+        user: TelegramUser,
+        chat_id: int,
+        image: tuple[str, str, str],
+        *,
+        caption: str = "",
+    ) -> None:
+        """Images only make sense inside an open ticket conversation."""
+        if not self._handle_conversation(user, chat_id, caption, image=image):
+            self._safe_send(
+                chat_id,
+                "برای ارسال تصویر، ابتدا از منوی «تیکت ها» یک تیکت باز کنید یا پاسخ "
+                "همان تیکت را بزنید؛ سپس تصویر را همراه متن یا به تنهایی بفرستید.",
+                inline_keyboard([[("منوی اصلی", "h")]]),
+            )
+
+    def _download_image(self, chat_id: int, image: tuple[str, str, str]) -> AttachmentInput | None:
+        file_id, filename, content_type = image
+        try:
+            data = self.adapter.download_file(file_id, MAX_ATTACHMENT_BYTES)
+        except TelegramError:
+            logger.warning("Telegram image download failed for file %s", file_id)
+            self._safe_send(chat_id, "دریافت تصویر از تلگرام ممکن نشد. لطفا دوباره ارسال کنید.")
+            return None
+        except Exception:  # noqa: BLE001 - never expose internals in chat
+            logger.exception("Unexpected image download failure")
+            self._safe_send(chat_id, "دریافت تصویر از تلگرام ممکن نشد. لطفا دوباره ارسال کنید.")
+            return None
+        return AttachmentInput(data=data, filename=filename, content_type=content_type)
 
     # ------------------------------------------------------------------
     # Messages / activation
@@ -265,7 +325,21 @@ class TelegramBotService:
         if data == "pf":
             self._send_portfolio(chat_id)
             return True
-        if data.startswith(("o:", "oc:", "oi:", "op:", "opf:", "oq:", "oskip", "osubmit", "ox")):
+        if data.startswith(
+            (
+                "o:",
+                "oc:",
+                "oi:",
+                "op:",
+                "opf:",
+                "oq:",
+                "oback",
+                "oup",
+                "oskip",
+                "osubmit",
+                "ox",
+            )
+        ):
             return self._order_flow(user, chat_id).handle_callback(data)
         if data.startswith("p:") and data[2:].isdigit():
             index = int(data[2:])
@@ -567,7 +641,14 @@ class TelegramBotService:
             inline_keyboard([[("لغو", f"{self._index_of(member)}:home")]]),
         )
 
-    def _handle_conversation(self, user: TelegramUser, chat_id: int, text: str) -> bool:
+    def _handle_conversation(
+        self,
+        user: TelegramUser,
+        chat_id: int,
+        text: str,
+        *,
+        image: tuple[str, str, str] | None = None,
+    ) -> bool:
         conversation = self._get_conversation(user)
         if conversation is None:
             return False
@@ -599,6 +680,11 @@ class TelegramBotService:
             return True
 
         if conversation.step == "ticket_subject":
+            if image is not None and not text:
+                self._safe_send(
+                    chat_id, "ابتدا موضوع تیکت را بنویسید؛ سپس در مرحله بعد تصویر را بفرستید."
+                )
+                return True
             if len(text) < 3:
                 self._safe_send(chat_id, "موضوع خیلی کوتاه است. یک موضوع واضح تر بنویسید.")
                 return True
@@ -611,6 +697,10 @@ class TelegramBotService:
                 "متن کامل تیکت را بنویسید. می توانید چند خط توضیح بدهید.",
                 inline_keyboard([[("لغو", "cancel")]]),
             )
+            return True
+
+        attachment = self._download_image(chat_id, image) if image is not None else None
+        if image is not None and attachment is None:
             return True
 
         if conversation.step == "ticket_reply":
@@ -627,6 +717,7 @@ class TelegramBotService:
                     member=member,
                     actor=actor_for_employer(member),
                     channel="telegram",
+                    attachments=[attachment] if attachment else None,
                 )
                 self.db.commit()
             except ApiError as exc:
@@ -659,6 +750,7 @@ class TelegramBotService:
                     admin_id=None,
                     actor=actor_for_employer(member),
                     channel="telegram",
+                    attachments=[attachment] if attachment else None,
                 )
                 self.db.commit()
             except ApiError as exc:

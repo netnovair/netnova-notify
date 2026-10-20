@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.adapters.telegram.base import (
     PermanentTelegramError,
     TelegramAdapter,
+    TelegramError,
     UnknownTelegramError,
 )
 from app.core.config import Settings
@@ -108,6 +109,7 @@ def handle_ticket_notify(
             "برای پاسخ به پنل مدیریت مراجعه کنید."
         )
         adapter.send_message(settings.admin_telegram_chat_id, text)
+        _forward_attachments(adapter, settings.admin_telegram_chat_id, message)
         return
 
     member_id = job.payload.get("member_id")
@@ -133,6 +135,27 @@ def handle_ticket_notify(
         ]
     text = f"<b>پاسخ جدید پشتیبانی</b>\nموضوع: {ticket.subject}\n\n{preview}"
     adapter.send_message(chat_id, text, inline_keyboard(rows))
+    _forward_attachments(adapter, chat_id, message)
+
+
+def _forward_attachments(adapter: TelegramAdapter, chat_id: int, message) -> None:
+    """Re-upload ticket images so both sides see them inside Telegram.
+
+    The files are already stored in PostgreSQL; Telegram cannot fetch them (the
+    endpoint requires an admin session), so the bytes are uploaded directly.
+    """
+    for attachment in message.attachments:
+        try:
+            adapter.send_media(
+                chat_id,
+                attachment.data,
+                attachment.filename,
+                as_document=attachment.content_type == "image/gif",
+            )
+        except TelegramError:
+            logger.warning(
+                "Could not forward ticket attachment %s to chat %s", attachment.id, chat_id
+            )
 
 
 HANDLERS = {

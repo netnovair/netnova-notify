@@ -6,6 +6,7 @@ simulated, so mock output is never presented as a real Telegram delivery.
 
 from __future__ import annotations
 
+import base64
 import itertools
 import logging
 import threading
@@ -13,6 +14,13 @@ import threading
 from app.adapters.telegram.base import SendResult
 
 logger = logging.getLogger(__name__)
+
+#: Smallest possible valid PNG (1x1, transparent); keeps the mock honest about
+#: the magic-byte check without touching the network.
+MOCK_IMAGE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
+    "hKmMIQAAAABJRU5ErkJggg=="
+)
 
 
 class MockTelegramAdapter:
@@ -22,6 +30,8 @@ class MockTelegramAdapter:
         self._counter = itertools.count(1)
         self._lock = threading.Lock()
         self.sent: list[dict] = []
+        #: file_id/max_bytes of every download_file call, for assertions.
+        self.downloads: list[dict] = []
 
     def send_message(self, chat_id: int, text: str, keyboard: dict | None = None) -> SendResult:
         with self._lock:
@@ -73,8 +83,9 @@ class MockTelegramAdapter:
         return SendResult(message_id=None, is_mock=True)
 
     def download_file(self, file_id: str, max_bytes: int) -> bytes:
-        # Deterministic placeholder so tests can assert the upload path without a network.
-        return f"mock-file:{file_id}".encode()
+        # A real 1x1 PNG so the same signature check runs as in production.
+        self.downloads.append({"file_id": file_id, "max_bytes": max_bytes})
+        return MOCK_IMAGE_PNG
 
     def set_my_commands(self, commands: list[dict]) -> bool:
         self.commands = list(commands)

@@ -5,6 +5,7 @@ import {
   formatDate,
   formatDateTime,
   formatNumber,
+  formatAge,
   formatRelative,
   fromDateTimeInput,
   toDateInput,
@@ -46,6 +47,14 @@ describe("Persian formatting", () => {
     expect(formatRelative("2026-10-19T11:30:00Z", now)).toContain("دقیقه پیش");
     expect(formatRelative("2026-10-19T09:00:00Z", now)).toContain("ساعت پیش");
     expect(formatRelative(null, now)).toBe("—");
+  });
+
+  it("formats a known age without reading the clock", () => {
+    expect(formatAge(10)).toBe("لحظه ای پیش");
+    expect(formatAge(120)).toContain("دقیقه پیش");
+    expect(formatAge(7200)).toContain("ساعت پیش");
+    expect(formatAge(86400 * 10)).toContain("روز پیش");
+    expect(formatAge(-30)).toBe("لحظه ای پیش");
   });
 
   it("round-trips datetime-local values", () => {

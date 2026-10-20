@@ -181,7 +181,20 @@ export default function SettingsPage() {
                 <StatusRow
                   label="کارهای در صف / ناموفق"
                   value={`${formatNumber(data.pending_jobs)} / ${formatNumber(data.failed_jobs)}`}
-                  tone={data.failed_jobs > 0 ? "warning" : "neutral"}
+                  tone={
+                    data.queue_status === "stalled" || data.failed_jobs > 0
+                      ? "warning"
+                      : data.queue_status === "draining"
+                        ? "success"
+                        : "neutral"
+                  }
+                  hint={
+                    data.queue_status === "stalled"
+                      ? "صف منتظر است و پردازشگری آن را نمی خواند"
+                      : data.queue_status === "draining"
+                        ? "پردازشگر فعال است و صف را تخلیه می کند"
+                        : "صف خالی است"
+                  }
                 />
               </div>
               <div>
@@ -284,7 +297,11 @@ export default function SettingsPage() {
               <p className="mt-2 text-[10px] leading-6 text-muted">
                 Worker سرویس مستقل است و پس از restart کارهای پردازش نشده را از صف پایدار
                 ادامه می دهد. برای بررسی یک باره صف می توانید از{" "}
-                <code dir="ltr">--once</code> استفاده کنید.
+                <code dir="ltr">--once</code> استفاده کنید. روی میزبان بدون سرویس Worker
+                (مثل Render Free) متغیر <code dir="ltr">EMBEDDED_WORKER=true</code> را روشن
+                کنید و ورک فلو <code dir="ltr">Queue worker</code> در GitHub را فعال
+                بگذارید؛ وضعیت همین کارت نشان می دهد که صف واقعا تخلیه می شود یا نه.
+                {data?.embedded_worker ? " در این نسخه، Worker داخل خود API اجرا می شود." : ""}
               </p>
             </div>
           </div>
