@@ -1,0 +1,55 @@
+name: Migrate database
+
+# Render's free tier has no shell and no one-off jobs, so schema changes are
+# applied from a GitHub runner against the production database. Run this right
+# after a release that adds migrations, before relying on the new code.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "upgrade | current | check"
+        required: true
+        default: upgrade
+      revision:
+        description: "Target revision for upgrade (empty = head)"
+        required: false
+        default: ""
+
+concurrency:
+  group: migrate-database
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: pip install -r apps/api/requirements.txt
+
+      - name: Alembic
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          ENVIRONMENT: development
+          TELEGRAM_ADAPTER: mock
+          COOKIE_SECURE: "false"
+          REV: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "DATABASE_URL secret is not set." >&2
+            exit 1
+          fi
+          case "${{ inputs.action }}" in
+            upgrade) alembic upgrade "${REV:-head}" ;;
+            current) alembic current -v ;;
+            check) alembic check ;;
+            *) echo "Unknown action: ${{ inputs.action }}" >&2; exit 1 ;;
+          esac
