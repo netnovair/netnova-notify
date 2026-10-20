@@ -67,7 +67,7 @@ class ProjectRepository:
                     selectinload(Project.features),
                     selectinload(Project.channels),
                     selectinload(Project.members).selectinload(ProjectMember.telegram_user),
-                selectinload(Project.members).selectinload(ProjectMember.channel_identities),
+                    selectinload(Project.members).selectinload(ProjectMember.channel_identities),
                 )
                 .order_by(Project.created_at.desc())
                 .offset((page - 1) * page_size)

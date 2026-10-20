@@ -55,9 +55,7 @@ def _add_sms_identity(project_id: str, member_id: str, phone: str = "09121234567
 
 
 class _FakeChannel:
-    def __init__(
-        self, channel: str, error: Exception | None = None
-    ) -> None:
+    def __init__(self, channel: str, error: Exception | None = None) -> None:
         self.channel = channel
         self.error = error
         self.sent: list[tuple[str, str]] = []

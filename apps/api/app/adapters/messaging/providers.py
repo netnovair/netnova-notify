@@ -152,9 +152,7 @@ class _TelegramCompatibleHttpAdapter:
         if response.status_code == 200 and body.get("ok"):
             result = body.get("result") or {}
             message_id = result.get("message_id")
-            return DeliveryResult(
-                message_id=str(message_id) if message_id is not None else None
-            )
+            return DeliveryResult(message_id=str(message_id) if message_id is not None else None)
 
         description = str(body.get("description") or response.text[:200])
         retry_after = (body.get("parameters") or {}).get("retry_after")

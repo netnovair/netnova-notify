@@ -428,9 +428,7 @@ class TelegramBotService:
                     f"وضعیت: {status}\n"
                     f"آخرین پیام: {html_escape((last.body if last else '')[:120])}"
                 )
-                rows.append(
-                    [(f"مشاهده تیکت {position}", f"{index}:ticket:{position - 1}")]
-                )
+                rows.append([(f"مشاهده تیکت {position}", f"{index}:ticket:{position - 1}")])
             text = truncate("\n\n".join(parts))
         else:
             text = "هنوز تیکتی برای این پروژه ثبت نکرده اید."
@@ -451,9 +449,7 @@ class TelegramBotService:
             return tickets[ordinal]
         return None
 
-    def _show_ticket(
-        self, chat_id: int, member: ProjectMember, index: int, ordinal: int
-    ) -> None:
+    def _show_ticket(self, chat_id: int, member: ProjectMember, index: int, ordinal: int) -> None:
         ticket = self._ticket_at(member, ordinal)
         back = inline_keyboard([[("بازگشت به فهرست", f"{index}:tickets")]])
         if ticket is None:
@@ -472,7 +468,10 @@ class TelegramBotService:
         if ticket.status == "closed":
             lines.append("")
             lines.append("<i>این تیکت بسته شده است؛ ارسال پاسخ آن را دوباره باز می کند.</i>")
-        rows = [[("پاسخ به این تیکت", f"{index}:treply:{ordinal}")], [("بازگشت به فهرست", f"{index}:tickets")]]
+        rows = [
+            [("پاسخ به این تیکت", f"{index}:treply:{ordinal}")],
+            [("بازگشت به فهرست", f"{index}:tickets")],
+        ]
         self._safe_send(chat_id, truncate("\n\n".join(lines)), inline_keyboard(rows))
 
     def _start_ticket_reply(

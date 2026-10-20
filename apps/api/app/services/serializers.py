@@ -102,9 +102,7 @@ def project_out(
     now: datetime,
 ) -> ProjectOut:
     flags = {feature.key: feature.enabled for feature in project.features}
-    feature_settings = {
-        feature.key: feature.settings or {} for feature in project.features
-    }
+    feature_settings = {feature.key: feature.settings or {} for feature in project.features}
     return ProjectOut(
         id=project.id,
         name=project.name,
@@ -290,8 +288,7 @@ def ticket_list_item(ticket, now: datetime) -> TicketListItem:
         member_unread=ticket.member_unread,
         last_message_at=ticket.last_message_at,
         is_overdue=(
-            ticket.status == "pending_admin"
-            and ticket.last_message_at < now - timedelta(hours=48)
+            ticket.status == "pending_admin" and ticket.last_message_at < now - timedelta(hours=48)
         ),
         created_at=ticket.created_at,
     )
@@ -302,7 +299,11 @@ def ticket_detail(ticket, now: datetime) -> TicketDetail:
     member = None
     if ticket.member_id is not None:
         member = next(
-            (item for item in (ticket.project.members if ticket.project else []) if item.id == ticket.member_id),
+            (
+                item
+                for item in (ticket.project.members if ticket.project else [])
+                if item.id == ticket.member_id
+            ),
             None,
         )
     return TicketDetail(

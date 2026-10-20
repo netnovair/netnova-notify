@@ -69,9 +69,7 @@ class ProjectFeature(UUIDPrimaryKeyMixin, Base):
         Boolean, default=True, server_default=true(), nullable=False
     )
     # Feature-specific configuration (validated by the feature plugin itself).
-    settings: Mapped[dict] = mapped_column(
-        JSONB, default=dict, nullable=False, server_default="{}"
-    )
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False, server_default="{}")
 
     project: Mapped[Project] = relationship(back_populates="features")
 
@@ -97,8 +95,6 @@ class ProjectChannel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )
-    settings: Mapped[dict] = mapped_column(
-        JSONB, default=dict, nullable=False, server_default="{}"
-    )
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False, server_default="{}")
 
     project: Mapped[Project] = relationship(back_populates="channels")

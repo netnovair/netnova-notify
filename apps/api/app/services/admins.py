@@ -96,9 +96,7 @@ class AdminService:
                 raise conflict("نمی توانید حساب خودتان را غیرفعال کنید.")
             if not is_active:
                 active_count = int(
-                    db.scalar(
-                        select(func.count(AdminUser.id)).where(AdminUser.is_active.is_(True))
-                    )
+                    db.scalar(select(func.count(AdminUser.id)).where(AdminUser.is_active.is_(True)))
                     or 0
                 )
                 if active_count <= 1:

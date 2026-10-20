@@ -13,14 +13,16 @@ from app.models.ticket import Ticket
 class TicketRepository:
     _loads = (
         selectinload(Ticket.messages),
-        selectinload(Ticket.project).selectinload(Project.members).selectinload(
-            ProjectMember.telegram_user
-        ),
+        selectinload(Ticket.project)
+        .selectinload(Project.members)
+        .selectinload(ProjectMember.telegram_user),
     )
 
     @staticmethod
     def get(db: Session, ticket_id: uuid.UUID) -> Ticket | None:
-        return db.scalar(select(Ticket).where(Ticket.id == ticket_id).options(*TicketRepository._loads))
+        return db.scalar(
+            select(Ticket).where(Ticket.id == ticket_id).options(*TicketRepository._loads)
+        )
 
     @staticmethod
     def list(

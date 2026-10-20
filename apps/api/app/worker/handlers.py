@@ -131,11 +131,7 @@ def handle_ticket_notify(
             [("مشاهده تیکت ها", f"{index}:tickets")],
             [("بازگشت به منو", f"{index}:home")],
         ]
-    text = (
-        "<b>پاسخ جدید پشتیبانی</b>\n"
-        f"موضوع: {ticket.subject}\n\n"
-        f"{preview}"
-    )
+    text = f"<b>پاسخ جدید پشتیبانی</b>\nموضوع: {ticket.subject}\n\n{preview}"
     adapter.send_message(chat_id, text, inline_keyboard(rows))
 
 

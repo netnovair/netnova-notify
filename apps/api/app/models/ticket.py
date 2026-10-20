@@ -79,7 +79,9 @@ class Ticket(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
-    admin_unread: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    admin_unread: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     member_unread: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )

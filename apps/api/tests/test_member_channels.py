@@ -73,9 +73,7 @@ def test_duplicate_destination_cannot_span_two_projects(admin_client: TestClient
     first_project, first = _active_member(admin_client, 940003)
     second_project, second = _active_member(admin_client, 940004)
 
-    first_url = (
-        f"/api/v1/projects/{first_project['id']}/members/{first['id']}/channels/smsir"
-    )
+    first_url = f"/api/v1/projects/{first_project['id']}/members/{first['id']}/channels/smsir"
     assert admin_client.put(first_url, json={"external_id": "09121112233"}).status_code == 200
     duplicate = admin_client.put(
         f"/api/v1/projects/{second_project['id']}/members/{second['id']}/channels/smsir",

@@ -304,11 +304,17 @@ class NotificationService:
             NotificationService._fail(db, notification, "پروژه مربوط به این اطلاعیه یافت نشد.", now)
             return notification.status
         if project.status != "active" or project.archived_at is not None:
-            NotificationService._fail(db, notification, "پروژه غیرفعال یا بایگانی شده است و ارسال انجام نشد.", now)
+            NotificationService._fail(
+                db, notification, "پروژه غیرفعال یا بایگانی شده است و ارسال انجام نشد.", now
+            )
             return notification.status
 
         enabled_channels = [row.channel for row in project.channels if row.enabled]
-        requested = [channel for channel in (notification.channels or ["telegram"]) if channel in CHANNEL_KEYS]
+        requested = [
+            channel
+            for channel in (notification.channels or ["telegram"])
+            if channel in CHANNEL_KEYS
+        ]
         channels = [channel for channel in requested if channel in enabled_channels]
         if not channels:
             NotificationService._fail(
@@ -381,9 +387,7 @@ class NotificationService:
             for delivery in notification.deliveries
             if delivery.status == DeliveryStatus.SENT.value
         }
-        pending_targets = [
-            item for item in targets if (item[0], item[1]) not in already_sent
-        ]
+        pending_targets = [item for item in targets if (item[0], item[1]) not in already_sent]
 
         if not pending_targets:
             notification.status = NotificationStatus.SENT.value
@@ -426,9 +430,7 @@ class NotificationService:
                 else:
                     channel_adapter = get_channel_adapter(channel)
                 if not channel_adapter.configured:
-                    raise PermanentChannelError(
-                        f"کانال {channel} در سرور پیکربندی نشده است."
-                    )
+                    raise PermanentChannelError(f"کانال {channel} در سرور پیکربندی نشده است.")
                 if channel in HTML_CHANNELS:
                     result = channel_adapter.send(recipient, text)
                 else:

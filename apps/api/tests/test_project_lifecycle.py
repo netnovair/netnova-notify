@@ -34,9 +34,10 @@ def test_archive_stops_bot_and_restore_brings_it_back(
     assert restored.status_code == 200
     assert restored.json()["archived_at"] is None
     telegram_update(admin_client, telegram_id=930001, callback_data="0:ann")
-    assert "اطلاعیه" in last_message(mock_adapter)["text"] or "هنوز اطلاعیه" in last_message(
-        mock_adapter
-    )["text"]
+    assert (
+        "اطلاعیه" in last_message(mock_adapter)["text"]
+        or "هنوز اطلاعیه" in last_message(mock_adapter)["text"]
+    )
 
 
 def test_delete_requires_exact_name_confirmation(admin_client: TestClient) -> None:
@@ -59,9 +60,7 @@ def test_delete_requires_exact_name_confirmation(admin_client: TestClient) -> No
     from app.models.audit import AuditLog
 
     with SessionLocal() as db:
-        rows = db.scalars(
-            select(AuditLog).where(AuditLog.action == "project.deleted")
-        ).all()
+        rows = db.scalars(select(AuditLog).where(AuditLog.action == "project.deleted")).all()
         assert len(rows) == 1
         assert rows[0].project_id is None
         assert rows[0].context["name"] == "پروژه حذف شدنی"

@@ -20,7 +20,10 @@ def test_admin_can_change_own_password_and_sessions_rotate(admin_client: TestCli
     second = TestClient(admin_client.app)
     other = second.post(
         "/api/v1/auth/login",
-        json={"email": settings.bootstrap_admin_email, "password": settings.bootstrap_admin_password},
+        json={
+            "email": settings.bootstrap_admin_email,
+            "password": settings.bootstrap_admin_password,
+        },
     )
     assert other.status_code == 200
     other_token = other.cookies.get("nn_session")
@@ -77,7 +80,11 @@ def test_admin_crud_and_guards(admin_client: TestClient) -> None:
 
     duplicate = admin_client.post(
         "/api/v1/admins",
-        json={"email": "second@netnova.ir", "display_name": "تکراری", "password": "Second-Admin-Pass-1"},
+        json={
+            "email": "second@netnova.ir",
+            "display_name": "تکراری",
+            "password": "Second-Admin-Pass-1",
+        },
     )
     assert duplicate.status_code == 409
 

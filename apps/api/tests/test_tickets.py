@@ -64,9 +64,7 @@ def test_employer_files_ticket_from_bot_and_admin_replies(
     assert buttons[0][0]["callback_data"] == "0:tickets"
 
     # Closing and reopening by a new employer message is explicit.
-    closed = admin_client.patch(
-        f"/api/v1/tickets/{ticket['id']}/status", json={"status": "closed"}
-    )
+    closed = admin_client.patch(f"/api/v1/tickets/{ticket['id']}/status", json={"status": "closed"})
     assert closed.status_code == 200
     assert closed.json()["status"] == "closed"
 

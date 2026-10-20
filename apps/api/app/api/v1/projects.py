@@ -226,7 +226,9 @@ def purge_demo_projects(
 ) -> dict:
     """Delete all demo-flagged projects. ``confirm`` must be the word DEMO."""
     if confirm.strip().upper() != "DEMO":
-        raise ApiError(422, "confirmation_mismatch", "برای حذف داده های نمایشی، عبارت DEMO را وارد کنید.")
+        raise ApiError(
+            422, "confirmation_mismatch", "برای حذف داده های نمایشی، عبارت DEMO را وارد کنید."
+        )
     result = purge_demo_projects_data(db, actor=ctx.actor)
     db.commit()
     return result
