@@ -11,11 +11,12 @@ from app.adapters.telegram.base import (
     TelegramError,
     UnknownTelegramError,
 )
-from app.adapters.telegram.formatting import inline_keyboard, truncate, url_keyboard
+from app.adapters.telegram.formatting import inline_keyboard, url_keyboard
 from app.core.config import Settings
 from app.core.security import utcnow
 from app.domain.jalali import format_jalali_date
 from app.domain.payments import format_amount
+from app.domain.telegram_html import truncate_html
 from app.models.job import ScheduledJob
 from app.repositories.licenses import MemberRepository
 from app.repositories.notifications import NotificationRepository
@@ -320,8 +321,11 @@ def handle_license_delivery(
     if license_row is None or member is None or member.telegram_user is None:
         logger.info("license delivery skipped: license or member is gone")
         return
-    if member.status != "active" or license_row.status == "revoked":
-        logger.info("license delivery skipped: member inactive or license revoked")
+    if member.status != "active" or LicenseService.effective(license_row) not in {
+        "active",
+        "pending",
+    }:
+        logger.info("license delivery skipped: member inactive or license revoked/expired")
         return
     if member.project is None or member.project.archived_at is not None:
         return
@@ -355,7 +359,7 @@ def handle_license_delivery(
     )
     adapter.send_message(
         chat_id,
-        truncate(text),
+        truncate_html(text),
         inline_keyboard([[("بازگشت به منو", f"{_membership_index(db, member)}:home")]]),
     )
     AuditService.record(

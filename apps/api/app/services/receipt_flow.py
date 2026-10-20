@@ -18,12 +18,13 @@ import re
 from sqlalchemy.orm import Session
 
 from app.adapters.telegram.base import TelegramAdapter
-from app.adapters.telegram.formatting import html_escape, inline_keyboard, truncate
+from app.adapters.telegram.formatting import html_escape, inline_keyboard
 from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.security import utcnow
 from app.domain.attachments import AttachmentInput
 from app.domain.payments import format_amount
+from app.domain.telegram_html import truncate_html
 from app.models.telegram import ProjectMember, TelegramUser
 from app.services.accounting import AccountingService, PaymentMethodService, TemplateService
 from app.services.orders import fa_digits, normalize_digits
@@ -119,7 +120,9 @@ class ReceiptFlow:
                 f"مانده حساب فعلی: <b>{format_amount(total.balance_minor, total.currency)}</b>"
             )
             header.append("")
-        self.bot._safe_send(self.chat_id, truncate("\n".join(header) + self.instructions_text()))
+        self.bot._safe_send(
+            self.chat_id, truncate_html("\n".join(header) + self.instructions_text())
+        )
         self.bot._set_conversation(
             self.user,
             self.member,
@@ -135,9 +138,16 @@ class ReceiptFlow:
         )
 
     def show_history(self) -> None:
-        receipts = AccountingService.list_receipts(
-            self.db, project_id=self.member.project_id, limit=8
-        )
+        # Own receipts plus the ones the agency recorded for this project. A
+        # receipt uploaded by another member (multi-member projects later) never
+        # appears in this chat.
+        receipts = [
+            receipt
+            for receipt in AccountingService.list_receipts(
+                db=self.db, project_id=self.member.project_id, limit=20
+            )
+            if receipt.member_id in (None, self.member.id)
+        ][:8]
         if not receipts:
             self.bot._safe_send(
                 self.chat_id,
@@ -163,7 +173,7 @@ class ReceiptFlow:
         lines.append("<i>تایید نهایی پس از بررسی تیم پشتیبانی انجام می شود.</i>")
         self.bot._safe_send(
             self.chat_id,
-            truncate("\n".join(lines)),
+            truncate_html("\n".join(lines)),
             inline_keyboard(
                 [
                     [("ارسال رسید جدید", f"{self.index}:rnew")],
@@ -269,7 +279,7 @@ class ReceiptFlow:
         )
         self.bot._safe_send(
             self.chat_id,
-            truncate(text),
+            truncate_html(text),
             inline_keyboard(
                 [
                     [("سوابق واریز", f"{self.index}:rhist")],

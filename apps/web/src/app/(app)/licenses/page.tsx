@@ -258,6 +258,12 @@ export default function LicensesPage() {
                             size="sm"
                             variant="ghost"
                             loading={busy}
+                            disabled={license.effective_status !== "active"}
+                            title={
+                              license.effective_status === "active"
+                                ? "ارسال خصوصی کد در تلگرام کارفرما"
+                                : "فقط لایسنس فعال قابل ارسال است"
+                            }
                             onClick={() => void deliver(license)}
                           >
                             ارسال به کارفرما

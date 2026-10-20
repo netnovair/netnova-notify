@@ -134,6 +134,20 @@ class _Sanitizer(HTMLParser):
         return "".join(self.parts)
 
 
+def _drop_partial_tag(text: str) -> str:
+    """Remove a tag that was cut in half by a length limit.
+
+    Cutting ``...<a href="https://exa`` would leave a stray ``<`` that Telegram
+    renders as text (or rejects with "can't parse entities"), so the partial tag
+    is dropped instead. Sanitized text never contains a literal ``<`` outside a
+    tag, which makes this check safe.
+    """
+    last_open = text.rfind("<")
+    if last_open > text.rfind(">"):
+        return text[:last_open]
+    return text
+
+
 def sanitize_telegram_html(value: str, *, limit: int = MAX_LENGTH) -> str:
     """Return a safe Telegram HTML string for ``value``.
 
@@ -150,8 +164,25 @@ def sanitize_telegram_html(value: str, *, limit: int = MAX_LENGTH) -> str:
     except Exception:  # noqa: BLE001 - malformed markup must never break a send
         return escape(value, quote=False)
     if len(cleaned) > limit:
-        cleaned = cleaned[: limit - 20].rstrip() + "…"
+        # Re-run the (shorter) prefix through the sanitizer: it closes the tags
+        # that the cut left open, so the final string is always balanced.
+        cut = _drop_partial_tag(cleaned[: limit - 20].rstrip())
+        cleaned = sanitize_telegram_html(cut, limit=limit) + "…"
     return cleaned
+
+
+def truncate_html(
+    value: str,
+    limit: int = MAX_LENGTH,
+    *,
+    suffix: str = "\n\n(پیام کوتاه شد)",
+) -> str:
+    """Shorten already-sanitized HTML without breaking its tags."""
+    if len(value) <= limit:
+        return value
+    budget = max(0, limit - len(suffix) - 1)
+    cut = _drop_partial_tag(value[:budget].rstrip())
+    return sanitize_telegram_html(cut, limit=limit) + suffix
 
 
 _TAG_RE = re.compile(r"<[^>]+>")

@@ -14,7 +14,7 @@ from app.adapters.messaging.base import (
 )
 from app.adapters.messaging.registry import CHANNEL_KEYS, get_channel_adapter
 from app.adapters.telegram.base import TelegramAdapter
-from app.adapters.telegram.formatting import html_escape, truncate
+from app.adapters.telegram.formatting import html_escape
 from app.core.config import get_settings
 from app.core.errors import conflict, not_found
 from app.core.security import utcnow
@@ -26,7 +26,7 @@ from app.domain.enums import (
     NotificationType,
 )
 from app.domain.notification_rules import can_cancel, can_retry
-from app.domain.telegram_html import sanitize_telegram_html
+from app.domain.telegram_html import sanitize_telegram_html, truncate_html
 from app.models.notification import DeliveryAttempt, Notification
 from app.models.project import Project
 from app.models.telegram import ProjectMember
@@ -64,7 +64,9 @@ class NotificationService:
             f"{sanitize_telegram_html(notification.body)}\n\n"
             f"<i>NetNova Notify</i>"
         )
-        return truncate(text)
+        # The body may contain Telegram markup, so a plain slice could cut a tag
+        # in half and make Telegram reject the whole message.
+        return truncate_html(text)
 
     @staticmethod
     def create(

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Eye, X } from "lucide-react";
+import { Check, Eye, SplitSquareVertical, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
@@ -83,6 +83,7 @@ export function ReceiptsPanel({
   const [review, setReview] = useState<{ receipt: PaymentReceipt; mode: "approve" | "reject" } | null>(
     null,
   );
+  const [allocating, setAllocating] = useState<PaymentReceipt | null>(null);
 
   const receipts = useApiData<PaymentReceipt[]>(
     (signal) =>
@@ -193,6 +194,17 @@ export function ReceiptsPanel({
                         >
                           <Eye size={15} aria-hidden />
                         </button>
+                        {receipt.status === "approved" && (
+                          <button
+                            type="button"
+                            onClick={() => setAllocating(receipt)}
+                            className="rounded-lg p-1.5 text-muted transition hover:bg-white/5 hover:text-ink"
+                            aria-label="ویرایش تخصیص"
+                            title="ویرایش تخصیص"
+                          >
+                            <SplitSquareVertical size={15} aria-hidden />
+                          </button>
+                        )}
                         {receipt.status === "pending" && (
                           <>
                             <button
@@ -237,6 +249,18 @@ export function ReceiptsPanel({
               review.mode === "approve" ? "رسید تایید شد." : "رسید رد شد.",
               "success",
             );
+          }}
+        />
+      )}
+      {allocating && (
+        <AllocationModal
+          receipt={allocating}
+          onClose={() => setAllocating(null)}
+          onDone={() => {
+            setAllocating(null);
+            receipts.reload();
+            onChanged();
+            notify("تخصیص رسید به روز شد.", "success");
           }}
         />
       )}
@@ -316,6 +340,148 @@ function ReceiptDetail({
           )}
         </div>
       )}
+    </Modal>
+  );
+}
+
+function AllocationModal({
+  receipt,
+  onClose,
+  onDone,
+}: {
+  receipt: PaymentReceipt;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { notify } = useToast();
+  const [saving, setSaving] = useState(false);
+  const [drafts, setDrafts] = useState<AllocationDraft[]>(() =>
+    receipt.allocations.map((allocation) => ({
+      paymentId: allocation.payment_id,
+      amount: allocation.amount_minor,
+    })),
+  );
+
+  const invoices = useApiData<Page<Payment>>(
+    (signal) =>
+      api.get<Page<Payment>>(
+        `/payments?project_id=${receipt.project_id}&page_size=100`,
+        signal,
+      ),
+    [receipt.project_id],
+  );
+
+  const currentAllocation = (paymentId: string) =>
+    receipt.allocations.find((allocation) => allocation.payment_id === paymentId)?.amount_minor ??
+    0;
+
+  // An already allocated invoice shows a smaller remainder, because that money
+  // is still on it. Editing must be able to reuse the full amount.
+  const available = (invoice: Payment) =>
+    invoice.remaining_minor + currentAllocation(invoice.id);
+
+  const rows = (invoices.data?.items ?? [])
+    .filter(
+      (invoice) =>
+        invoice.status !== "cancelled" &&
+        (available(invoice) > 0 || currentAllocation(invoice.id) > 0),
+    )
+    .sort((a, b) => a.due_at.localeCompare(b.due_at));
+
+  const allocated = drafts.reduce((sum, row) => sum + (row.amount || 0), 0);
+  const over = allocated > receipt.amount_minor;
+  const invalid = drafts.some((row) => {
+    const invoice = rows.find((item) => item.id === row.paymentId);
+    return !invoice || row.amount <= 0 || row.amount > available(invoice);
+  });
+  const disabled = saving || over || invalid || allocated <= 0;
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.patch(`/accounting/receipts/${receipt.id}/allocations`, {
+        allocations: drafts.map((row) => ({
+          payment_id: row.paymentId,
+          amount_minor: Math.round(row.amount),
+        })),
+      });
+      onDone();
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="ویرایش تخصیص رسید"
+      description={`${receipt.project_name ?? ""} · ${formatAmount(
+        receipt.amount_minor,
+        receipt.currency as Currency,
+      )}`}
+      size="lg"
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="h-9 rounded-lg border border-line px-3 text-xs text-ink transition hover:bg-white/5 disabled:opacity-50"
+          >
+            انصراف
+          </button>
+          <Button onClick={() => void save()} loading={saving} disabled={disabled}>
+            ذخیره تخصیص
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-xs">
+        <InlineAlert>
+          مبلغی که تخصیص نیابد به عنوان اعتبار پروژه می ماند. جمع تخصیص از مبلغ رسید بیشتر نمی شود.
+        </InlineAlert>
+        {invoices.loading && rows.length === 0 ? (
+          <SkeletonRows rows={3} />
+        ) : rows.length === 0 ? (
+          <p className="text-warning">فاکتور بازی برای این پروژه وجود ندارد.</p>
+        ) : (
+          rows.map((invoice) => {
+            const draft = drafts.find((row) => row.paymentId === invoice.id);
+            return (
+              <div
+                key={invoice.id}
+                className="flex flex-col gap-2 rounded-lg border border-line/50 p-2 sm:flex-row sm:items-center"
+              >
+                <div className="flex-1">
+                  <div>{invoice.title}</div>
+                  <div className="text-[11px] text-muted">
+                    قابل تخصیص: {formatAmount(available(invoice), invoice.currency as Currency)}
+                  </div>
+                </div>
+                <input
+                  className="field-input sm:w-40"
+                  inputMode="numeric"
+                  value={draft?.amount ?? ""}
+                  onChange={(event) => {
+                    const value = Number(event.target.value.replace(/[^0-9]/g, "") || 0);
+                    setDrafts((previous) => {
+                      const others = previous.filter((row) => row.paymentId !== invoice.id);
+                      return value > 0 ? [...others, { paymentId: invoice.id, amount: value }] : others;
+                    });
+                  }}
+                  aria-label={`مبلغ تخصیص ${invoice.title}`}
+                />
+              </div>
+            );
+          })
+        )}
+        <p className={over ? "text-danger" : "text-muted"}>
+          جمع تخصیص: {formatNumber(allocated)} از {formatNumber(receipt.amount_minor)}
+        </p>
+      </div>
     </Modal>
   );
 }

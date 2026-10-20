@@ -237,3 +237,20 @@ def test_template_rendering_escapes_values_and_keeps_markup() -> None:
     assert "<code>NN-AAAA-BBBB</code>" in rendered
     # Unknown placeholders are left for the editor to notice, never silently dropped.
     assert "{unknown}" in rendered
+
+
+def test_sanitizer_truncation_never_splits_a_tag() -> None:
+    from app.domain.telegram_html import sanitize_telegram_html, truncate_html
+
+    long_body = "<b>" + "متن " * 400 + "</b>"
+    cut = sanitize_telegram_html(long_body, limit=200)
+    assert len(cut) <= 200
+    # Every opened tag is closed again, and no tag is cut in half.
+    assert cut.count("<b>") == cut.count("</b>")
+    assert cut.rstrip("…").rstrip().endswith("</b>")
+
+    composed = "<b>عنوان</b>\n\n" + "متن " * 500
+    trimmed = truncate_html(composed, limit=250)
+    assert len(trimmed) <= 250
+    assert trimmed.endswith("(پیام کوتاه شد)")
+    assert trimmed.count("<b>") == trimmed.count("</b>")

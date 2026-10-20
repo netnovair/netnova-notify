@@ -564,3 +564,97 @@ def test_approval_notice_tells_the_employer_the_project_is_settled(
     notice = [message for message in mock_adapter.sent if "تایید شد" in message["text"]][-1]
     assert "تسویه" in notice["text"]
     assert "بدهی" not in notice["text"]
+
+
+def test_rich_announcement_stays_rich_in_the_bot_archive(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    project = _employer(admin_client, 860016, name="پروژه اطلاعیه غنی")
+    created = admin_client.post(
+        f"/api/v1/projects/{project['id']}/notifications",
+        json={
+            "type": "announcement",
+            "title": "قرارداد جدید",
+            "body": "لطفا <b>مبلغ</b> را بررسی کنید.\n<blockquote>مهلت: فردا</blockquote>",
+            "schedule": "now",
+        },
+    )
+    assert created.status_code == 201, created.text
+    run_worker(mock_adapter)
+
+    # "مشاهده اطلاعیه ها" must render the stored markup, not its literal tags.
+    telegram_update(admin_client, telegram_id=860016, callback_data="0:ann")
+    archive = last_message(mock_adapter)["text"]
+    assert "<b>مبلغ</b>" in archive
+    assert "&lt;b&gt;" not in archive
+    assert "<blockquote>" in archive
+
+
+def test_license_delivery_refuses_an_inactive_license(admin_client: TestClient) -> None:
+    project = _employer(admin_client, 860017, name="پروژه لایسنس غیرفعال")
+    licenses = admin_client.get(f"/api/v1/licenses?project_id={project['id']}").json()
+    license_id = licenses["items"][0]["id"]
+
+    revoked = admin_client.post(
+        f"/api/v1/licenses/{license_id}/revoke", json={"reason": "پایان همکاری"}
+    )
+    assert revoked.status_code in (200, 204), revoked.text
+
+    delivered = admin_client.post(f"/api/v1/licenses/{license_id}/deliver", json={})
+    assert delivered.status_code == 409
+    assert delivered.json()["error"]["code"] == "license_not_active"
+
+
+def test_employer_history_hides_receipts_of_other_members(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    project = _employer(admin_client, 860018, name="پروژه سوابق")
+    _receipt(admin_client, project["id"], amount=1_000_000)  # entered by the admin
+
+    with SessionLocal() as db:
+        # A receipt from a different member of the same project (multi-member
+        # readiness): it must never show up in this employer's chat.
+        from app.models.telegram import ProjectMember, TelegramUser
+
+        receipt = db.query(PaymentReceipt).one()
+        assert receipt.member_id is None
+        outsider = TelegramUser(
+            telegram_id=860019,
+            username="other_member",
+            first_name="عضو",
+            last_name="دیگر",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        db.add(outsider)
+        db.flush()
+        member = ProjectMember(
+            project_id=receipt.project_id,
+            telegram_user_id=outsider.id,
+            license_id=None,
+            role="member",
+            status="active",
+            activated_at=utcnow(),
+        )
+        db.add(member)
+        db.flush()
+        foreign = PaymentReceipt(
+            project_id=receipt.project_id,
+            member_id=member.id,
+            submitted_by_type="employer",
+            amount_minor=7_770_000,
+            currency="IRT",
+            note="رسید عضو دیگر",
+            status="pending",
+            review_note="",
+            channel="telegram",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        db.add(foreign)
+        db.commit()
+
+    telegram_update(admin_client, telegram_id=860018, callback_data="0:rhist")
+    history = last_message(mock_adapter)["text"]
+    assert "7,770,000" not in history
+    assert "1,000,000" in history

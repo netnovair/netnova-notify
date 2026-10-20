@@ -80,14 +80,28 @@ class AdvisorService:
                 "maxOutputTokens": 400,
             },
         }
-        with httpx.Client(timeout=settings.ai_advisor_timeout_seconds) as client:
-            response = client.post(
-                url,
-                params={"key": settings.ai_advisor_api_key},
-                json=payload,
-            )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            with httpx.Client(timeout=settings.ai_advisor_timeout_seconds) as client:
+                response = client.post(
+                    url,
+                    # The key travels in a header, never in the URL, so it cannot
+                    # end up in a proxy or access log.
+                    headers={"x-goog-api-key": settings.ai_advisor_api_key},
+                    json=payload,
+                )
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPError as exc:
+            # A provider outage must not surface as a 500 in the panel.
+            logger.warning("Advisor provider call failed: %s", type(exc).__name__)
+            raise AdvisorUnavailable(
+                "ارتباط با سرویس مشاور برقرار نشد. لطفا بعدا تلاش کنید."
+            ) from exc
+        except ValueError as exc:  # non-JSON body
+            logger.warning("Advisor provider returned an unreadable response")
+            raise AdvisorUnavailable(
+                "پاسخ سرویس مشاور قابل خواندن نبود. لطفا بعدا تلاش کنید."
+            ) from exc
         candidates = data.get("candidates") or []
         if not candidates:
             logger.warning(

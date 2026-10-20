@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import AdminContext, get_admin_context
-from app.core.errors import ApiError, not_found
+from app.core.errors import ApiError, conflict, not_found
 from app.core.rate_limit import rate_limiter
 from app.core.security import utcnow
 from app.db.session import get_db
@@ -158,6 +158,16 @@ def deliver_license(
 ) -> LicenseOut:
     """Queue a private delivery of the code to the employer's Telegram chat."""
     license_row = LicenseService.get(db, license_id)
+    # Checked before the member lookup so a revoked/expired licence always
+    # answers with the real reason instead of "no employer found".
+    if LicenseService.effective(license_row) in {
+        LicenseStatus.REVOKED.value,
+        LicenseStatus.EXPIRED.value,
+    }:
+        raise conflict(
+            "این لایسنس لغو یا منقضی شده است؛ ارسال کد برای کارفرما انجام نمی شود.",
+            code="license_not_active",
+        )
     members = [
         member
         for member in MemberRepository.list_for_project(db, license_row.project_id)

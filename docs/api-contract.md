@@ -493,7 +493,7 @@ API responses carry `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`
 | --- | --- |
 | `GET /licenses/{id}/code` | نمایش کد کامل؛ ثبت در Audit و محدودیت ۱۰ بار در دقیقه (`429`) |
 | `POST /licenses/{id}/reissue` | لغو کد قبلی و صدور کد جدید؛ کد خام فقط در همین پاسخ |
-| `POST /licenses/{id}/deliver` | صف ارسال خصوصی کد به تلگرام کارفرما (job: `license_delivery`) |
+| `POST /licenses/{id}/deliver` | صف ارسال خصوصی کد به تلگرام کارفرما (job: `license_delivery`)؛ لایسنس لغو/منقضی → `409 license_not_active` |
 
 فهرست لایسنس ها همچنان فقط `code_prefix` را برمی گرداند. کد در جدول شغل ها ذخیره
 نمی شود؛ Worker آن را هنگام ارسال رمزگشایی می کند.

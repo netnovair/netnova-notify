@@ -443,6 +443,14 @@ class LicenseService:
                 "کد این لایسنس قابل بازیابی نیست. ابتدا کد جدید صادر کنید.",
                 code="license_code_unavailable",
             )
+        if LicenseService.effective(license_row) in {
+            LicenseStatus.REVOKED.value,
+            LicenseStatus.EXPIRED.value,
+        }:
+            raise conflict(
+                "این لایسنس لغو یا منقضی شده است؛ ارسال کد برای کارفرما انجام نمی شود.",
+                code="license_not_active",
+            )
         if member.status != MemberStatus.ACTIVE.value:
             raise conflict("اتصال کارفرما تایید نشده است.", code="member_not_active")
         if member.telegram_user is None:

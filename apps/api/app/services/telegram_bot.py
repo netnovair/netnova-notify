@@ -23,7 +23,6 @@ from app.adapters.telegram.formatting import (
     html_escape,
     inline_keyboard,
     reply_keyboard,
-    truncate,
 )
 from app.core.config import Settings
 from app.core.errors import ApiError
@@ -42,7 +41,7 @@ from app.domain.menu import (
     soon_key_for_callback,
 )
 from app.domain.payments import format_amount, is_overdue
-from app.domain.telegram_html import sanitize_telegram_html
+from app.domain.telegram_html import sanitize_telegram_html, truncate_html
 from app.features import FeatureContext, find_by_action, get_feature, handler_for
 from app.models.payment import Payment
 from app.models.system import SystemState
@@ -526,7 +525,7 @@ class TelegramBotService:
         enabled = enabled_features(flags)
         if not enabled:
             text += "\n\nدر حال حاضر قابلیتی برای این پروژه فعال نشده است."
-        self._safe_send(chat_id, truncate(text), project_menu_buttons(index, flags))
+        self._safe_send(chat_id, truncate_html(text), project_menu_buttons(index, flags))
 
     def send_announcements(self, chat_id: int, member: ProjectMember, index: int) -> None:
         self._send_announcements(chat_id, member, index)
@@ -546,11 +545,13 @@ class TelegramBotService:
             parts.append(
                 f"<b>{html_escape(notification.title)}</b>\n"
                 f"<i>{format_jalali_date(sent_at, self.settings.tehran_timezone)}</i>\n"
-                f"{html_escape(notification.body)}"
+                # Announcement bodies may carry Telegram markup; escaping would
+                # show the tags literally, so they are sanitized instead.
+                f"{sanitize_telegram_html(notification.body)}"
             )
         self._safe_send(
             chat_id,
-            truncate("\n\n".join(parts)),
+            truncate_html("\n\n".join(parts)),
             inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
         )
 
@@ -635,7 +636,7 @@ class TelegramBotService:
             "<i>این اعداد از فاکتورها و رسیدهای تاییدشده محاسبه می شوند؛ "
             "تایید تراکنش بانکی با پشتیبانی است.</i>"
         )
-        self._safe_send(chat_id, truncate("\n".join(lines)), inline_keyboard(rows))
+        self._safe_send(chat_id, truncate_html("\n".join(lines)), inline_keyboard(rows))
 
     def _send_invoices(self, chat_id: int, member: ProjectMember, index: int) -> None:
         invoices = AccountingService.invoices(self.db, member.project_id)
@@ -647,7 +648,7 @@ class TelegramBotService:
         lines = ["<b>فاکتورهای پروژه</b>", ""]
         for payment in invoices:
             lines.append(self._format_payment(payment, now))
-        self._safe_send(chat_id, truncate("\n\n".join(lines)), back)
+        self._safe_send(chat_id, truncate_html("\n\n".join(lines)), back)
 
     def _send_cards(
         self, chat_id: int, user: TelegramUser, member: ProjectMember, index: int
@@ -657,7 +658,7 @@ class TelegramBotService:
         flow = ReceiptFlow(self.db, self.adapter, self.settings, user, chat_id, member, index, self)
         self._safe_send(
             chat_id,
-            truncate(flow.instructions_text()),
+            truncate_html(flow.instructions_text()),
             inline_keyboard(
                 [
                     [("ارسال رسید", f"{index}:rnew")],
@@ -715,7 +716,7 @@ class TelegramBotService:
                     f"آخرین پیام: {html_escape((last.body if last else '')[:120])}"
                 )
                 rows.append([(f"مشاهده تیکت {position}", f"{index}:ticket:{position - 1}")])
-            text = truncate("\n\n".join(parts))
+            text = truncate_html("\n\n".join(parts))
         else:
             text = "هنوز تیکتی برای این پروژه ثبت نکرده اید."
         rows.append([("ثبت تیکت جدید", f"{index}:newticket")])
@@ -762,7 +763,7 @@ class TelegramBotService:
             [("پاسخ به این تیکت", f"{index}:treply:{ordinal}")],
             [("بازگشت به فهرست", f"{index}:tickets")],
         ]
-        self._safe_send(chat_id, truncate("\n\n".join(lines)), inline_keyboard(rows))
+        self._safe_send(chat_id, truncate_html("\n\n".join(lines)), inline_keyboard(rows))
 
     def _start_ticket_reply(
         self, user: TelegramUser, member: ProjectMember, chat_id: int, ordinal: int
@@ -1251,4 +1252,4 @@ class TelegramBotService:
         )
         # Errors propagate so the worker can classify them: transient errors are
         # retried, unknown outcomes are not (duplicate risk).
-        adapter.send_message(chat_id, truncate(text), keyboard)
+        adapter.send_message(chat_id, truncate_html(text), keyboard)

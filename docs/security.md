@@ -238,7 +238,16 @@ confirmed, that login errors are displayed, and that status labels render correc
 - The AI advisor receives only the employer's question and a short project context
   (name, status, description). It never receives amounts, license codes, Telegram ids or
   the database. Without a configured key the feature answers «به زودی»; no answer is
-  fabricated and provider errors never leak into the chat.
+  fabricated and provider errors never leak into the chat. A provider outage or timeout
+  is reported as `409 advisor_unavailable`, never as a 500 with internals.
+- The advisor API key is sent in the `x-goog-api-key` header, not in the query string,
+  so it cannot land in a proxy or access log.
+- Rich text is sanitized twice (on save and on render) against Telegram's own tag list;
+  text that is cut for length never leaves a tag half-open, because Telegram would reject
+  the whole message. The panel renders it with a React parser, never
+  `dangerouslySetInnerHTML`.
+- Admin-authored rich text in a ticket reply is stored as markup but the employer side
+  only receives Telegram's allow-listed subset; employer text is always escaped.
 - Audit logs are append-only through the API but not cryptographically signed; a
   database administrator can alter them.
 - Session fixation is mitigated by creating a new token at login and deleting the old
