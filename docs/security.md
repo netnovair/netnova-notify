@@ -229,8 +229,16 @@ confirmed, that login errors are displayed, and that status labels render correc
 - The bot secret protects the webhook, but Telegram itself is the trust anchor for
   sender identity. A leaked bot token allows impersonation of the bot — rotate and
   re-register immediately.
-- License codes are bearer secrets during delivery. Send them over a secure channel and
-  revoke if they may have leaked.
+- License codes are bearer secrets during delivery. New codes are stored twice: a
+  keyed hash for lookup and an AES-GCM ciphertext (`LICENSE_ENCRYPTION_KEY`, intentionally
+  separate from `SECRET_KEY`). Losing the encryption key makes codes unreadable but does
+  not invalidate them; rotate by reissuing. Legacy hash-only rows have no ciphertext and
+  must be reissued before they can be shown. Revealing a code is audited and limited to
+  10 requests per minute per administrator.
+- The AI advisor receives only the employer's question and a short project context
+  (name, status, description). It never receives amounts, license codes, Telegram ids or
+  the database. Without a configured key the feature answers «به زودی»; no answer is
+  fabricated and provider errors never leak into the chat.
 - Audit logs are append-only through the API but not cryptographically signed; a
   database administrator can alter them.
 - Session fixation is mitigated by creating a new token at login and deleting the old

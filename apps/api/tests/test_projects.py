@@ -16,7 +16,7 @@ def test_create_project_issues_license_and_hides_raw_code(admin_client: TestClie
     assert project["license"]["status"] == "pending"
     assert project["license"]["code_prefix"] == project["license_code"][:5]
     assert "code" not in project["license"]
-    assert len(project["features"]) == 5
+    assert len(project["features"]) == 6
     assert project["is_demo"] is False
 
     with SessionLocal() as db:

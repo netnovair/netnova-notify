@@ -68,9 +68,7 @@ class PaymentMethodService:
     @staticmethod
     def list(db: Session, *, project_id: uuid.UUID | None = None) -> list[PaymentMethod]:
         """Global rows, or the global rows plus the ones scoped to ``project_id``."""
-        stmt = select(PaymentMethod).order_by(
-            PaymentMethod.order_index, PaymentMethod.created_at
-        )
+        stmt = select(PaymentMethod).order_by(PaymentMethod.order_index, PaymentMethod.created_at)
         if project_id is None:
             stmt = stmt.where(PaymentMethod.project_id.is_(None))
         else:
@@ -86,9 +84,7 @@ class PaymentMethodService:
     def for_project(db: Session, project_id: uuid.UUID) -> list[PaymentMethod]:
         """Project-specific rows win; otherwise the global defaults are used."""
         rows = PaymentMethodService.list(db, project_id=project_id)
-        scoped = [
-            row for row in rows if row.is_active and row.project_id == project_id
-        ]
+        scoped = [row for row in rows if row.is_active and row.project_id == project_id]
         if scoped:
             return scoped
         return [row for row in rows if row.is_active and row.project_id is None]
@@ -332,22 +328,28 @@ class AccountingService:
     @staticmethod
     def credit(db: Session, project_id: uuid.UUID, currency: str) -> int:
         """Approved receipts minus everything allocated from them."""
-        received = db.scalar(
-            select(func.coalesce(func.sum(PaymentReceipt.amount_minor), 0)).where(
-                PaymentReceipt.project_id == project_id,
-                PaymentReceipt.currency == currency,
-                PaymentReceipt.status == ReceiptStatus.APPROVED.value,
+        received = (
+            db.scalar(
+                select(func.coalesce(func.sum(PaymentReceipt.amount_minor), 0)).where(
+                    PaymentReceipt.project_id == project_id,
+                    PaymentReceipt.currency == currency,
+                    PaymentReceipt.status == ReceiptStatus.APPROVED.value,
+                )
             )
-        ) or 0
-        allocated = db.scalar(
-            select(func.coalesce(func.sum(PaymentAllocation.amount_minor), 0))
-            .join(PaymentReceipt, PaymentReceipt.id == PaymentAllocation.receipt_id)
-            .where(
-                PaymentReceipt.project_id == project_id,
-                PaymentReceipt.currency == currency,
-                PaymentReceipt.status == ReceiptStatus.APPROVED.value,
+            or 0
+        )
+        allocated = (
+            db.scalar(
+                select(func.coalesce(func.sum(PaymentAllocation.amount_minor), 0))
+                .join(PaymentReceipt, PaymentReceipt.id == PaymentAllocation.receipt_id)
+                .where(
+                    PaymentReceipt.project_id == project_id,
+                    PaymentReceipt.currency == currency,
+                    PaymentReceipt.status == ReceiptStatus.APPROVED.value,
+                )
             )
-        ) or 0
+            or 0
+        )
         return max(0, int(received) - int(allocated))
 
     @staticmethod
@@ -500,9 +502,7 @@ class AccountingService:
             .where(PaymentReceipt.id == receipt_id)
             .options(
                 selectinload(PaymentReceipt.files),
-                selectinload(PaymentReceipt.allocations).selectinload(
-                    PaymentAllocation.payment
-                ),
+                selectinload(PaymentReceipt.allocations).selectinload(PaymentAllocation.payment),
             )
         )
         if receipt is None:
@@ -521,9 +521,7 @@ class AccountingService:
             select(PaymentReceipt)
             .options(
                 selectinload(PaymentReceipt.files),
-                selectinload(PaymentReceipt.allocations).selectinload(
-                    PaymentAllocation.payment
-                ),
+                selectinload(PaymentReceipt.allocations).selectinload(PaymentAllocation.payment),
             )
             .order_by(PaymentReceipt.created_at.desc())
             .limit(limit)
@@ -575,12 +573,16 @@ class AccountingService:
             raise bad_request("حداقل یک فاکتور برای تخصیص انتخاب کنید.")
         total = sum(item.amount_minor for item in allocations)
         if total > receipt.amount_minor:
-            raise bad_request("جمع تخصیص ها از مبلغ رسید بیشتر است.", code="allocation_over_receipt")
+            raise bad_request(
+                "جمع تخصیص ها از مبلغ رسید بیشتر است.", code="allocation_over_receipt"
+            )
         seen: set[uuid.UUID] = set()
         prepared: list[tuple[Payment, int]] = []
         for item in allocations:
             if item.payment_id in seen:
-                raise bad_request("هر فاکتور فقط یک بار قابل انتخاب است.", code="duplicate_allocation")
+                raise bad_request(
+                    "هر فاکتور فقط یک بار قابل انتخاب است.", code="duplicate_allocation"
+                )
             seen.add(item.payment_id)
             payment = db.get(Payment, item.payment_id)
             if payment is None or payment.project_id != receipt.project_id:

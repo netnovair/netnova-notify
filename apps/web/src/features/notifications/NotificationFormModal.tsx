@@ -3,11 +3,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CalendarClock, Send, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
+import { TelegramHtml } from "@/features/accounting/TelegramHtml";
+import { RichTextEditor } from "@/features/rich-text/RichTextEditor";
 import { api, errorMessage } from "@/lib/api";
 import { fromDateTimeInput, toDateTimeInput } from "@/lib/format";
 import { NOTIFICATION_TYPE } from "@/lib/labels";
@@ -35,6 +37,7 @@ export function NotificationFormModal({
   const [serverError, setServerError] = useState<string | null>(null);
   const {
     register,
+    control,
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
@@ -151,22 +154,22 @@ export function NotificationFormModal({
           </div>
 
           <div>
-            <div className="flex items-center justify-between">
-              <label htmlFor="notification-body" className="field-label">
-                متن پیام
-              </label>
-              <span className="text-[10px] text-muted">{body?.length ?? 0} از ۳۵۰۰</span>
-            </div>
-            <textarea
-              id="notification-body"
-              rows={6}
-              maxLength={3500}
-              className="field-input resize-y leading-7"
-              placeholder="متن پیامی که برای کارفرما در تلگرام ارسال می شود."
-              aria-invalid={errors.body ? "true" : undefined}
-              {...register("body")}
+            <span className="field-label">متن پیام</span>
+            <Controller
+              control={control}
+              name="body"
+              render={({ field }) => (
+                <RichTextEditor
+                  id="notification-body"
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  maxLength={3500}
+                  placeholder="متن پیامی که برای کارفرما در تلگرام ارسال می شود."
+                  error={errors.body?.message}
+                  showPreview={false}
+                />
+              )}
             />
-            {errors.body ? <p className="field-error">{errors.body.message}</p> : null}
           </div>
 
           <fieldset>
@@ -233,9 +236,13 @@ export function NotificationFormModal({
                 {NOTIFICATION_TYPE[type] ?? "اطلاعیه"}
               </p>
               <p className="mt-2 font-semibold text-ink">{title || "عنوان اطلاعیه"}</p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-[#dfe5f5]">
-                {body || "متن پیام شما اینجا نمایش داده می شود."}
-              </p>
+              <div className="mt-1 whitespace-pre-wrap break-words text-[#dfe5f5]">
+                {body ? (
+                  <TelegramHtml html={body} />
+                ) : (
+                  "متن پیام شما اینجا نمایش داده می شود."
+                )}
+              </div>
               <p className="mt-2 text-[10px] italic text-muted">NetNova Notify</p>
             </div>
             {scheduledAt && scheduling === "later" ? (
@@ -245,7 +252,9 @@ export function NotificationFormModal({
             ) : null}
           </div>
           <p className="mt-2 text-[10px] leading-6 text-muted">
-            قالب بندی نهایی توسط ربات انجام می شود. این پیش نمایش فقط برای بازبینی متن است.
+            فقط تگ های رسمی تلگرام (درشت، کج، زیرخط، خط خورده، code، pre، blockquote و
+            لینک http/https) پشتیبانی می شوند؛ سایر تگ ها به صورت متن ساده ارسال می شوند.
+            متن داخل code در تلگرام قابل کپی است.
           </p>
         </div>
       </div>

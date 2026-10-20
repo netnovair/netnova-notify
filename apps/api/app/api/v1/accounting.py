@@ -132,7 +132,9 @@ def list_receipts(
     for receipt in rows:
         if receipt.project_id not in projects:
             projects[receipt.project_id] = ProjectService.get(db, receipt.project_id).name
-        output.append(AccountingService.receipt_out(receipt, project_name=projects[receipt.project_id]))
+        output.append(
+            AccountingService.receipt_out(receipt, project_name=projects[receipt.project_id])
+        )
     return output
 
 

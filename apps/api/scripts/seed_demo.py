@@ -21,13 +21,16 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.security import utcnow
 from app.db.session import SessionLocal
+from app.models.accounting import PaymentMethod, PaymentReceipt
 from app.models.project import Project
 from app.models.telegram import TelegramUser
 from app.repositories.licenses import MemberRepository
 from app.repositories.users import TelegramUserRepository
+from app.schemas.accounting import PaymentMethodIn
 from app.schemas.notification import NotificationCreate
 from app.schemas.payment import PaymentCreate
 from app.schemas.project import ProjectCreate
+from app.services.accounting import AccountingService, PaymentMethodService
 from app.services.audit import Actor
 from app.services.catalog import CatalogService
 from app.services.licenses import LicenseService
@@ -68,6 +71,54 @@ def _activate_demo_employer(db, *, project_id, code, telegram_id: int, name: str
     db.commit()
 
 
+def _ensure_demo_accounting(db, project: Project) -> tuple[bool, bool]:
+    """Add one clearly-fake card and one pending receipt to a demo project.
+
+    Idempotent: re-running the seed never duplicates them, and both rows belong
+    to the demo project only, so a real project never sees the fake card.
+    """
+    created_card = created_receipt = False
+    has_card = db.scalar(select(PaymentMethod.id).where(PaymentMethod.project_id == project.id))
+    if has_card is None:
+        PaymentMethodService.create(
+            db,
+            payload=PaymentMethodIn(
+                project_id=project.id,
+                title="کارت نمایشی (واریز نکنید)",
+                card_number="0000000000000000",
+                holder_name="نمایشی",
+                bank_name="نمایشی",
+                note="این شماره فقط برای آزمایش گردش کار است.",
+                is_active=True,
+                order_index=0,
+            ),
+            actor=SEED_ACTOR,
+        )
+        created_card = True
+    has_receipt = db.scalar(
+        select(PaymentReceipt.id).where(
+            PaymentReceipt.project_id == project.id,
+            PaymentReceipt.status == "pending",
+        )
+    )
+    if has_receipt is None:
+        AccountingService.create_receipt(
+            db,
+            project=project,
+            actor=SEED_ACTOR,
+            amount_minor=2_500_000,
+            currency="IRT",
+            tracking_code=None,
+            note="رسید نمایشی برای بررسی بخش تایید.",
+            channel="seed",
+            submitted_by_type="system",
+            member_id=None,
+        )
+        created_receipt = True
+    db.commit()
+    return created_card, created_receipt
+
+
 def main() -> int:
     setup_logging()
     settings = get_settings()
@@ -90,6 +141,17 @@ def main() -> int:
             db.commit()
             if seeded:
                 print(f"Service catalog seeded ({seeded} categories).")
+            demo_project = db.scalar(
+                select(Project).where(Project.is_demo.is_(True)).order_by(Project.created_at)
+            )
+            card, receipt = (
+                _ensure_demo_accounting(db, demo_project) if demo_project else (False, False)
+            )
+            if card or receipt:
+                print(
+                    "Demo accounting topped up: "
+                    f"card={'yes' if card else 'no'}, pending receipt={'yes' if receipt else 'no'}."
+                )
             print(f"Demo data already present ({existing} demo project(s)); nothing to do.")
             return 0
 
@@ -150,6 +212,8 @@ def main() -> int:
         payment_row_status = payment.status
         db.commit()
 
+        card_seeded, receipt_seeded = _ensure_demo_accounting(db, first)
+
         NotificationService.create(
             db,
             project=first,
@@ -167,6 +231,11 @@ def main() -> int:
         print(f"  {second.name}: license {second_code}")
         print("  The demo employer uses synthetic Telegram id 900000001 (mock only).")
         print(f"  One open demo payment: {payment_row_status}.")
+        print(
+            "  Demo accounting: "
+            f"card={'yes' if card_seeded else 'no'}, "
+            f"pending receipt={'yes' if receipt_seeded else 'no'}."
+        )
         print("Start the worker to process the queued welcome message in mock mode.")
         _ensure_admin_hint(db)
         return 0

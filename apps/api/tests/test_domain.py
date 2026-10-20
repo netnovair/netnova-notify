@@ -84,6 +84,7 @@ def test_feature_registry_and_menu() -> None:
         "announcements",
         "financial",
         "support",
+        "advisor",
         "performance",
         "progress",
     ]
@@ -94,7 +95,7 @@ def test_feature_registry_and_menu() -> None:
 
     keyboard = project_menu_buttons(0, flags)
     callbacks = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
-    assert callbacks[:3] == ["0:ann", "0:fin", "0:tickets"]
+    assert callbacks[:4] == ["0:ann", "0:fin", "0:tickets", "0:advice"]
     assert "0:soon:performance" in callbacks
     assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
 

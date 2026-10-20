@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { EmptyState, ErrorState, InlineAlert, SkeletonRows } from "@/components/ui/States";
 import { useToast } from "@/components/ui/Toast";
+import { TelegramHtml } from "@/features/accounting/TelegramHtml";
+import { RichTextEditor } from "@/features/rich-text/RichTextEditor";
 import { api, errorMessage, queryString } from "@/lib/api";
 import { formatDateTime, formatNumber, formatRelative } from "@/lib/format";
 import { useApiData } from "@/lib/hooks";
@@ -242,7 +244,13 @@ function TicketDetailPanel({
                 <span>{mine ? "پشتیبانی" : message.author_label || "کارفرما"}</span>
                 <span>{formatDateTime(message.created_at)}</span>
               </div>
-              <p className="whitespace-pre-wrap">{message.body}</p>
+              {mine ? (
+                <div className="whitespace-pre-wrap">
+                  <TelegramHtml html={message.body} />
+                </div>
+              ) : (
+                <p className="whitespace-pre-wrap">{message.body}</p>
+              )}
               {message.attachments.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {message.attachments.map((attachment) => (
@@ -267,14 +275,13 @@ function TicketDetailPanel({
         <label htmlFor="ticket-reply" className="mb-1 block text-[11px] text-muted">
           پاسخ شما
         </label>
-        <textarea
+        <RichTextEditor
           id="ticket-reply"
           value={reply}
-          onChange={(event) => setReply(event.target.value)}
-          rows={3}
+          onChange={setReply}
           maxLength={4000}
-          className="w-full resize-y rounded-lg border border-line bg-bg/60 px-3 py-2 text-xs leading-6 outline-none focus:border-accent/60"
           placeholder="پاسخ برای کارفرما..."
+          showPreview={false}
         />
         {files.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">

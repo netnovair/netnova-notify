@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    Text,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -37,6 +38,9 @@ class License(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    #: AES-GCM copy of the code (base64). NULL for legacy hash-only licenses and
+    #: when no LICENSE_ENCRYPTION_KEY is configured; those need a reissue.
+    code_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     code_prefix: Mapped[str] = mapped_column(String(8), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

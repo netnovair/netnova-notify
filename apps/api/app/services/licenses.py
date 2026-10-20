@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.crypto import (
+    LicenseCryptoError,
+    decrypt_code,
+    encrypt_code,
+    encryption_available,
+)
 from app.core.errors import ApiError, conflict, not_found
 from app.core.security import (
     generate_license_code,
@@ -74,9 +80,14 @@ class LicenseService:
                 500, "license_generation_failed", "صدور لایسنس ممکن نشد. دوباره تلاش کنید."
             )
 
+        encrypted = None
+        if encryption_available(settings.license_encryption_key):
+            encrypted = encrypt_code(raw_code, key=settings.license_encryption_key)
+
         license_row = License(
             project_id=project.id,
             code_hash=code_hash,
+            code_encrypted=encrypted,
             code_prefix=license_prefix(raw_code),
             status=LicenseStatus.PENDING.value,
             expires_at=expires_at,
@@ -353,6 +364,112 @@ class LicenseService:
             project_name=project.name,
             message="درخواست اتصال شما ثبت شد و پس از تایید مدیر فعال می شود.",
         )
+
+    # ------------------------------------------------------------------
+    # Showing and delivering the code
+    # ------------------------------------------------------------------
+    @staticmethod
+    def reveal_code(db: Session, *, license_row: License, actor: Actor) -> str:
+        """Decrypt the stored code for an administrator (audited)."""
+        settings = get_settings()
+        if license_row.code_encrypted is None:
+            raise conflict(
+                "کد این لایسنس فقط به صورت هش ذخیره شده است و قابل نمایش نیست. "
+                "برای دریافت کد، «صدور کد جدید» را بزنید.",
+                code="license_code_unavailable",
+            )
+        if not encryption_available(settings.license_encryption_key):
+            raise conflict(
+                "کلید رمزنگاری لایسنس روی سرور تنظیم نشده است؛ نمایش کد ممکن نیست.",
+                code="license_key_missing",
+            )
+        try:
+            code = decrypt_code(license_row.code_encrypted, key=settings.license_encryption_key)
+        except LicenseCryptoError as exc:
+            logger.warning("License %s could not be decrypted: %s", license_row.id, exc)
+            raise conflict(
+                "رمزگشایی کد لایسنس ممکن نشد. کلید رمزنگاری را بررسی کنید.",
+                code="license_decrypt_failed",
+            ) from exc
+        AuditService.record(
+            db,
+            actor=actor,
+            action="license.code_viewed",
+            entity_type="license",
+            entity_id=license_row.id,
+            project_id=license_row.project_id,
+            context={"prefix": license_row.code_prefix},
+            now=utcnow(),
+        )
+        return code
+
+    @staticmethod
+    def reissue(
+        db: Session,
+        *,
+        license_row: License,
+        actor: Actor,
+        expires_at: datetime | None = None,
+    ) -> tuple[License, str]:
+        """Revoke a license whose code cannot be shown and issue a fresh one."""
+        project = db.get(Project, license_row.project_id)
+        if project is None:
+            raise not_found("پروژه لایسنس یافت نشد.")
+        return LicenseService.issue(
+            db,
+            project=project,
+            actor=actor,
+            expires_at=expires_at or license_row.expires_at,
+            reason="reissue",
+        )
+
+    @staticmethod
+    def enqueue_delivery(
+        db: Session,
+        *,
+        license_row: License,
+        member: ProjectMember,
+        actor: Actor,
+        now: datetime | None = None,
+    ) -> ScheduledJob:
+        """Send the code privately to the employer's Telegram chat.
+
+        The job payload only carries ids: the code is decrypted inside the
+        worker, so the plaintext code never reaches the queue table.
+        """
+        now = now or utcnow()
+        if license_row.code_encrypted is None:
+            raise conflict(
+                "کد این لایسنس قابل بازیابی نیست. ابتدا کد جدید صادر کنید.",
+                code="license_code_unavailable",
+            )
+        if member.status != MemberStatus.ACTIVE.value:
+            raise conflict("اتصال کارفرما تایید نشده است.", code="member_not_active")
+        if member.telegram_user is None:
+            raise conflict("کارفرما به تلگرام متصل نیست.", code="member_without_telegram")
+        job = JobRepository.enqueue(
+            db,
+            kind=JobKind.LICENSE_DELIVERY.value,
+            payload={
+                "license_id": str(license_row.id),
+                "member_id": str(member.id),
+            },
+            run_at=now + timedelta(seconds=1),
+            now=now,
+            max_attempts=get_settings().job_max_attempts,
+            dedupe_key=f"license-delivery:{license_row.id}:{member.id}",
+        )
+        AuditService.record(
+            db,
+            actor=actor,
+            action="license.delivery_queued",
+            entity_type="license",
+            entity_id=license_row.id,
+            project_id=license_row.project_id,
+            context={"member_id": str(member.id)},
+            now=now,
+        )
+        return job
 
     @staticmethod
     def access_memberships(db: Session, telegram_user: TelegramUser) -> list[ProjectMember]:

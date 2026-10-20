@@ -160,7 +160,7 @@ describe("payment actions", () => {
 });
 
 describe("license reveal", () => {
-  it("warns that the code is shown only once", () => {
+  it("explains that the code is encrypted at rest", () => {
     wrap(
       <LicenseRevealModal
         open
@@ -170,7 +170,7 @@ describe("license reveal", () => {
       />,
     );
     expect(screen.getByText("NN-ABCD-EFGH-JKMN-PQRS")).toBeInTheDocument();
-    expect(screen.getByText(/فقط همین یک بار/)).toBeInTheDocument();
+    expect(screen.getByText(/رمزنگاری شده/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /کپی کد/ })).toBeInTheDocument();
   });
 });

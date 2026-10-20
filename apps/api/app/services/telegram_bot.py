@@ -42,6 +42,7 @@ from app.domain.menu import (
     soon_key_for_callback,
 )
 from app.domain.payments import format_amount, is_overdue
+from app.domain.telegram_html import sanitize_telegram_html
 from app.features import FeatureContext, find_by_action, get_feature, handler_for
 from app.models.payment import Payment
 from app.models.system import SystemState
@@ -95,6 +96,7 @@ BOT_COMMANDS = [
     {"command": "help", "description": "راهنما"},
 ]
 
+STEP_ADVISOR = "advisor_question"
 CONVERSATION_TTL_MINUTES = 30
 
 
@@ -374,7 +376,9 @@ class TelegramBotService:
             self._safe_send(
                 chat_id,
                 "عملیات لغو شد.",
-                inline_keyboard([[("وضعیت مالی", f"{index}:fin")], [("منوی اصلی", f"{index}:home")]]),
+                inline_keyboard(
+                    [[("وضعیت مالی", f"{index}:fin")], [("منوی اصلی", f"{index}:home")]]
+                ),
             )
             return True
         if len(parts) == 2 and parts[1] == "home":
@@ -552,6 +556,39 @@ class TelegramBotService:
     def send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
         self._send_financial(chat_id, member, index)
 
+    # ------------------------------------------------------------------
+    # AI advisor (structure only until an API key exists)
+    # ------------------------------------------------------------------
+    def send_advisor(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        from app.services.advisor import AdvisorService
+
+        back = inline_keyboard([[("بازگشت به منو", f"{index}:home")]])
+        status = AdvisorService.status(self.settings)
+        if not status.available:
+            # Never improvise an answer when the provider is not configured.
+            self._safe_send(
+                chat_id,
+                "قابلیت «مشاور هوشمند» به زودی فعال می شود.\n"
+                "تا آن زمان می توانید سوال خود را از بخش «پشتیبانی و تیکت» بپرسید.",
+                back,
+            )
+            return
+        if member.telegram_user is None:
+            self._safe_send(chat_id, "برای استفاده از مشاور، حساب تلگرام شما باید متصل باشد.", back)
+            return
+        self._set_conversation(
+            member.telegram_user,
+            member,
+            step=STEP_ADVISOR,
+            payload={"index": index},
+        )
+        self._safe_send(
+            chat_id,
+            "سوال خود را کوتاه بنویسید؛ پاسخ حداکثر ۶ خط خواهد بود.\n"
+            "برای انصراف /cancel را بفرستید.",
+            inline_keyboard([[("لغو", "cancel")]]),
+        )
+
     def _send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
         invoices_exist = bool(AccountingService.invoices(self.db, member.project_id))
         totals = (
@@ -576,9 +613,7 @@ class TelegramBotService:
         for total in totals:
             lines.append(f"بدهی: <b>{format_amount(total.debt_minor, total.currency)}</b>")
             if total.overdue_minor:
-                lines.append(
-                    f"سررسید گذشته: {format_amount(total.overdue_minor, total.currency)}"
-                )
+                lines.append(f"سررسید گذشته: {format_amount(total.overdue_minor, total.currency)}")
             lines.append(f"پرداخت شده: {format_amount(total.paid_minor, total.currency)}")
             if total.credit_minor:
                 lines.append(f"اعتبار: {format_amount(total.credit_minor, total.currency)}")
@@ -603,9 +638,7 @@ class TelegramBotService:
 
     def _send_invoices(self, chat_id: int, member: ProjectMember, index: int) -> None:
         invoices = AccountingService.invoices(self.db, member.project_id)
-        back = inline_keyboard(
-            [[("ارسال رسید", f"{index}:rnew")], [("بازگشت", f"{index}:fin")]]
-        )
+        back = inline_keyboard([[("ارسال رسید", f"{index}:rnew")], [("بازگشت", f"{index}:fin")]])
         if not invoices:
             self._safe_send(chat_id, "فاکتوری برای این پروژه ثبت نشده است.", back)
             return
@@ -620,9 +653,7 @@ class TelegramBotService:
     ) -> None:
         from app.services.receipt_flow import ReceiptFlow
 
-        flow = ReceiptFlow(
-            self.db, self.adapter, self.settings, user, chat_id, member, index, self
-        )
+        flow = ReceiptFlow(self.db, self.adapter, self.settings, user, chat_id, member, index, self)
         self._safe_send(
             chat_id,
             truncate(flow.instructions_text()),
@@ -651,7 +682,9 @@ class TelegramBotService:
             f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}",
         ]
         if payment.amount_paid_minor:
-            lines.append(f"پرداخت شده: {format_amount(payment.amount_paid_minor, payment.currency)}")
+            lines.append(
+                f"پرداخت شده: {format_amount(payment.amount_paid_minor, payment.currency)}"
+            )
         if remaining:
             lines.append(f"مانده: {format_amount(remaining, payment.currency)}")
         lines.extend([f"سررسید: {due}", f"وضعیت: {status}"])
@@ -712,10 +745,14 @@ class TelegramBotService:
             "",
         ]
         for message in ticket.messages[-6:]:
-            who = "پشتیبانی" if message.author_type == "admin" else "شما"
+            admin_message = message.author_type == "admin"
+            who = "پشتیبانی" if admin_message else "شما"
+            body = (
+                sanitize_telegram_html(message.body) if admin_message else html_escape(message.body)
+            )
             lines.append(
                 f"<b>{who}</b> - <i>{format_jalali_date(message.created_at, self.settings.tehran_timezone)}</i>\n"
-                f"{html_escape(message.body)}"
+                f"{body}"
             )
         if ticket.status == "closed":
             lines.append("")
@@ -806,6 +843,82 @@ class TelegramBotService:
             if image is not None:
                 return flow.handle_image(conversation, image)
             return flow.handle_text(conversation, text)
+
+        if conversation.step == STEP_ADVISOR:
+            from app.domain.advisor import AdvisorUnavailable
+            from app.services.advisor import AdvisorService
+
+            if text.startswith("/cancel"):
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "پرسش لغو شد.",
+                    inline_keyboard([[("منوی اصلی", "h")]]),
+                )
+                return True
+            question = text.strip()[:600]
+            if len(question) < 5:
+                self._safe_send(chat_id, "سوال را کمی کامل تر بنویسید (حداقل ۵ کاراکتر).")
+                return True
+            member = next(
+                (
+                    item
+                    for item in LicenseService.access_memberships(self.db, user)
+                    if str(item.id) == str(conversation.payload.get("member_id"))
+                ),
+                None,
+            )
+            index = int((conversation.payload or {}).get("index") or 0)
+            if member is None:
+                self._clear_conversation(conversation)
+                self._safe_send(chat_id, "دسترسی شما به این پروژه فعال نیست. لطفا /start را بزنید.")
+                return True
+            project = member.project
+            context = "\n".join(
+                part
+                for part in (
+                    f"نام پروژه: {project.name}" if project else "",
+                    f"وضعیت پروژه: {project.status}" if project else "",
+                    f"توضیح: {project.description}" if project and project.description else "",
+                )
+                if part
+            )
+            try:
+                answer = AdvisorService.answer(question, context=context)
+            except AdvisorUnavailable:
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "مشاور هوشمند هنوز فعال نشده است. سوال خود را از بخش «پشتیبانی و تیکت» بپرسید.",
+                    inline_keyboard(
+                        [
+                            [("پشتیبانی و تیکت", f"{index}:tickets")],
+                            [("منوی اصلی", f"{index}:home")],
+                        ]
+                    ),
+                )
+                return True
+            except Exception:  # noqa: BLE001 - provider errors never leak to chat
+                logger.exception("Advisor call failed")
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "در حال حاضر پاسخ به این سوال ممکن نشد. لطفا بعدا تلاش کنید یا از پشتیبانی بپرسید.",
+                    inline_keyboard([[("منوی اصلی", f"{index}:home")]]),
+                )
+                return True
+            self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                html_escape(answer),
+                inline_keyboard(
+                    [
+                        [("پرسش دیگر", f"{index}:advice")],
+                        [("منوی اصلی", f"{index}:home")],
+                    ]
+                ),
+            )
+            return True
 
         if text.startswith("/cancel"):
             self._clear_conversation(conversation)

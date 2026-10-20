@@ -80,7 +80,10 @@ class _Sanitizer(HTMLParser):
             self._open(f'<a href="{escape(href, quote=True)}">', "a")
             return
         if tag == "blockquote":
-            self._open("<blockquote expandable>" if "expandable" in attributes else "<blockquote>", "blockquote")
+            self._open(
+                "<blockquote expandable>" if "expandable" in attributes else "<blockquote>",
+                "blockquote",
+            )
             return
         if tag == "span":
             if attributes.get("class", "").strip().lower() == "tg-spoiler":

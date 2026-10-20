@@ -11,9 +11,10 @@ from app.adapters.telegram.base import (
     TelegramError,
     UnknownTelegramError,
 )
-from app.adapters.telegram.formatting import inline_keyboard, url_keyboard
+from app.adapters.telegram.formatting import inline_keyboard, truncate, url_keyboard
 from app.core.config import Settings
 from app.core.security import utcnow
+from app.domain.jalali import format_jalali_date
 from app.domain.payments import format_amount
 from app.models.job import ScheduledJob
 from app.repositories.licenses import MemberRepository
@@ -25,6 +26,12 @@ from app.services.payments import PaymentService
 from app.services.telegram_bot import TelegramBotService
 
 logger = logging.getLogger(__name__)
+
+
+def _membership_index(db: Session, member) -> int:
+    """Position of a member in their own project list (used in callback data)."""
+    memberships = LicenseService.access_memberships(db, member.telegram_user)
+    return next((position for position, item in enumerate(memberships) if item.id == member.id), 0)
 
 
 def handle_notification_send(
@@ -98,7 +105,12 @@ def handle_ticket_notify(
         logger.info("ticket %s no longer exists; notification skipped", raw_ticket)
         return
     project = ticket.project
-    preview = clean_for_telegram(message.body)
+    if message.author_type == "admin":
+        from app.domain.telegram_html import plain_text
+
+        preview = clean_for_telegram(plain_text(message.body))
+    else:
+        preview = clean_for_telegram(message.body)
 
     if job.payload.get("target") == "admin":
         if not settings.admin_telegram_chat_id:
@@ -160,7 +172,6 @@ def _forward_attachments(adapter: TelegramAdapter, chat_id: int, message) -> Non
             logger.warning(
                 "Could not forward ticket attachment %s to chat %s", attachment.id, chat_id
             )
-
 
 
 def handle_receipt_submitted(
@@ -277,6 +288,78 @@ def handle_receipt_result(
     )
 
 
+def handle_license_delivery(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Send the license code privately to the employer's own Telegram chat.
+
+    The code is decrypted here, not stored in the job payload, so the durable
+    queue table never contains a usable license.
+    """
+    from app.core.crypto import LicenseCryptoError, decrypt_code, encryption_available
+    from app.models.license import License
+    from app.services.accounting import TemplateService
+
+    raw_license = job.payload.get("license_id")
+    raw_member = job.payload.get("member_id")
+    if not raw_license or not raw_member:
+        logger.warning("license_delivery job %s is missing identifiers", job.id)
+        return
+    license_row = db.get(License, uuid.UUID(str(raw_license)))
+    member = MemberRepository.get(db, uuid.UUID(str(raw_member)))
+    if license_row is None or member is None or member.telegram_user is None:
+        logger.info("license delivery skipped: license or member is gone")
+        return
+    if member.status != "active" or license_row.status == "revoked":
+        logger.info("license delivery skipped: member inactive or license revoked")
+        return
+    if member.project is None or member.project.archived_at is not None:
+        return
+    if license_row.code_encrypted is None or not encryption_available(
+        settings.license_encryption_key
+    ):
+        logger.warning("license %s cannot be decrypted (no stored code or key)", license_row.id)
+        return
+    try:
+        code = decrypt_code(license_row.code_encrypted, key=settings.license_encryption_key)
+    except LicenseCryptoError:
+        logger.exception("license %s decryption failed", license_row.id)
+        return
+    chat_id = int(member.telegram_user.telegram_id)
+    project = member.project
+    expires = (
+        format_jalali_date(license_row.expires_at, settings.tehran_timezone)
+        if license_row.expires_at
+        else "بدون تاریخ انقضا"
+    )
+    text = TemplateService.render(
+        db,
+        "license_delivery",
+        project_id=project.id,
+        values={
+            "project": project.name,
+            "name": member.telegram_user.first_name or "",
+            "license": code,
+            "due": expires,
+        },
+    )
+    adapter.send_message(
+        chat_id,
+        truncate(text),
+        inline_keyboard([[("بازگشت به منو", f"{_membership_index(db, member)}:home")]]),
+    )
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action="license.delivered",
+        entity_type="license",
+        entity_id=license_row.id,
+        project_id=project.id,
+        context={"chat_id": chat_id},
+        now=utcnow(),
+    )
+
+
 HANDLERS = {
     "receipt_submitted": handle_receipt_submitted,
     "receipt_result": handle_receipt_result,
@@ -284,6 +367,7 @@ HANDLERS = {
     "payment_reminder": handle_payment_reminder,
     "activation_approved": handle_activation_approved,
     "ticket_notify": handle_ticket_notify,
+    "license_delivery": handle_license_delivery,
 }
 
 

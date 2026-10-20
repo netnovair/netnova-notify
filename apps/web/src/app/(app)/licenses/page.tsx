@@ -13,7 +13,7 @@ import { LicenseStatusBadge } from "@/components/ui/StatusBadge";
 import { useToast } from "@/components/ui/Toast";
 import { LicenseIssueModal } from "@/features/licenses/LicenseIssueModal";
 import { LicenseRevealModal } from "@/features/licenses/LicenseRevealModal";
-import { api, errorMessage, queryString } from "@/lib/api";
+import { ApiError, api, errorMessage, queryString } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { LICENSE_STATUS } from "@/lib/labels";
 import { useApiData } from "@/lib/hooks";
@@ -32,6 +32,8 @@ export default function LicensesPage() {
   const [issueOpen, setIssueOpen] = useState(false);
   const [fixedProjectId, setFixedProjectId] = useState<string | undefined>(undefined);
   const [revealed, setRevealed] = useState<LicenseCreated | null>(null);
+  const [revealTitle, setRevealTitle] = useState("کد لایسنس صادر شد");
+  const [reissueTarget, setReissueTarget] = useState<License | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<License | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -48,6 +50,53 @@ export default function LicensesPage() {
     (signal) => api.get<Page<ProjectListItem>>("/projects?page_size=100", signal),
     [],
   );
+
+  async function revealCode(license: License) {
+    setBusy(true);
+    try {
+      const result = await api.get<{ id: string; code: string; code_prefix: string }>(
+        `/licenses/${license.id}/code`,
+      );
+      setRevealTitle("کد لایسنس");
+      setRevealed({ ...license, code: result.code });
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "license_code_unavailable") {
+        setReissueTarget(license);
+      } else {
+        notify(errorMessage(error), "error");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reissue() {
+    if (!reissueTarget) return;
+    setBusy(true);
+    try {
+      const created = await api.post<LicenseCreated>(`/licenses/${reissueTarget.id}/reissue`);
+      setReissueTarget(null);
+      setRevealTitle("کد جدید صادر شد");
+      setRevealed(created);
+      licenses.reload();
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deliver(license: License) {
+    setBusy(true);
+    try {
+      await api.post(`/licenses/${license.id}/deliver`, {});
+      notify("کد لایسنس برای کارفرما در تلگرام ارسال می شود.", "success");
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function revoke() {
     if (!revokeTarget) return;
@@ -87,9 +136,10 @@ export default function LicensesPage() {
 
       <div className="mb-4">
         <InlineAlert>
-          کد لایسنس با یک الگوریتم hash کلیددار ذخیره می شود و از پایگاه داده قابل بازیابی
-          نیست. در صورت مفقود شدن کد، لایسنس جدید صادر کنید؛ لایسنس قبلی لغو می شود ولی
-          اتصال کارفرما حفظ می شود.
+          کد لایسنس به صورت رمزنگاری شده (AES-GCM با کلید جداگانه) ذخیره می شود؛ دیدن کد
+          در گزارش رویدادها ثبت می شود. لایسنس های قدیمی که فقط هش دارند قابل نمایش نیستند
+          و باید «کد جدید» بگیرند؛ در این حالت کد قبلی بی درنگ بی اعتبار می شود ولی اتصال
+          کارفرما حفظ می شود.
         </InlineAlert>
       </div>
 
@@ -195,10 +245,26 @@ export default function LicensesPage() {
                       <td className="text-xs">{formatDate(license.expires_at)}</td>
                       <td className="text-xs">{formatDateTime(license.activated_at)}</td>
                       <td>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <Button
                             size="sm"
                             variant="secondary"
+                            loading={busy}
+                            onClick={() => void revealCode(license)}
+                          >
+                            نمایش کد
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            loading={busy}
+                            onClick={() => void deliver(license)}
+                          >
+                            ارسال به کارفرما
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             onClick={() => {
                               setFixedProjectId(license.project_id);
                               setIssueOpen(true);
@@ -243,10 +309,20 @@ export default function LicensesPage() {
       <LicenseRevealModal
         open={Boolean(revealed)}
         onClose={() => setRevealed(null)}
+        title={revealTitle}
         code={revealed?.code ?? null}
         projectName={
           projectItems.find((project) => project.id === revealed?.project_id)?.name
         }
+      />
+      <ConfirmDialog
+        open={Boolean(reissueTarget)}
+        onClose={() => setReissueTarget(null)}
+        onConfirm={reissue}
+        loading={busy}
+        title="صدور کد جدید"
+        message="کد این لایسنس قابل نمایش نیست (فقط هش شده است). با صدور کد جدید، کد قبلی لغو می شود و کد تازه یک بار همین حالا نمایش داده می شود. اتصال کارفرمای فعلی حفظ می شود."
+        confirmLabel="صدور کد جدید"
       />
       <ConfirmDialog
         open={Boolean(revokeTarget)}

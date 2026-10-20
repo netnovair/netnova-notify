@@ -121,9 +121,7 @@ class PaymentReceiptFile(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "payment_receipt_files"
     __table_args__ = (
-        CheckConstraint(
-            "size_bytes > 0 AND size_bytes <= 5242880", name="receipt_file_size_valid"
-        ),
+        CheckConstraint("size_bytes > 0 AND size_bytes <= 5242880", name="receipt_file_size_valid"),
         Index("ix_payment_receipt_files_receipt", "receipt_id", "created_at"),
     )
 

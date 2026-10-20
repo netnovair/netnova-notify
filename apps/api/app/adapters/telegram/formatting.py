@@ -30,9 +30,7 @@ def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict:
 def url_keyboard(rows: list[list[tuple[str, str]]]) -> dict:
     """Inline keyboard whose buttons open a URL (used for panel deep links)."""
     return {
-        "inline_keyboard": [
-            [{"text": label, "url": url} for label, url in row] for row in rows
-        ]
+        "inline_keyboard": [[{"text": label, "url": url} for label, url in row] for row in rows]
     }
 
 

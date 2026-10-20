@@ -74,12 +74,15 @@ def invoice_status(amount_minor: int, paid_minor: int, current: str) -> str:
 
 
 def is_open_invoice(invoice: InvoiceLike) -> bool:
-    return invoice.status != PaymentStatus.CANCELLED.value and invoice_remaining(
-        invoice.amount_minor, invoice.amount_paid_minor
-    ) > 0
+    return (
+        invoice.status != PaymentStatus.CANCELLED.value
+        and invoice_remaining(invoice.amount_minor, invoice.amount_paid_minor) > 0
+    )
 
 
-def auto_allocate(amount_minor: int, invoices: Iterable[InvoiceLike]) -> tuple[list[Allocation], int]:
+def auto_allocate(
+    amount_minor: int, invoices: Iterable[InvoiceLike]
+) -> tuple[list[Allocation], int]:
     """Apply ``amount_minor`` to open invoices, oldest due date first.
 
     Returns the allocations and the leftover (credit). An invoice is never

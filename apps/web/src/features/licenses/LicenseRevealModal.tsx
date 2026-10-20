@@ -10,17 +10,21 @@ export function LicenseRevealModal({
   onClose,
   code,
   projectName,
+  title = "کد لایسنس صادر شد",
+  warning,
 }: {
   open: boolean;
   onClose: () => void;
   code: string | null;
   projectName?: string;
+  title?: string;
+  warning?: string;
 }) {
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="کد لایسنس صادر شد"
+      title={title}
       description={
         projectName ? `این کد مخصوص پروژه «${projectName}» است.` : undefined
       }
@@ -38,8 +42,8 @@ export function LicenseRevealModal({
         <div className="flex items-start gap-3 rounded-xl border border-warning/30 bg-warning/[0.06] px-4 py-3 text-xs leading-7 text-[#f5d992]">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
           <p>
-            کد لایسنس فقط همین یک بار نمایش داده می شود و به صورت هش نگهداری می شود.
-            آن را همین حالا کپی کنید و از طریق کانال امن به کارفرما برسانید.
+            {warning ??
+              "این کد در پایگاه داده رمزنگاری شده ذخیره می شود و فقط مدیر می تواند آن را ببیند. آن را از طریق کانال امن به کارفرما برسانید."}
           </p>
         </div>
 
