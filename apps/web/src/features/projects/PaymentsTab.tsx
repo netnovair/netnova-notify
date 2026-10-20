@@ -14,7 +14,16 @@ import { api, queryString } from "@/lib/api";
 import { formatAmount, formatDate, formatDateTime } from "@/lib/format";
 import { PAYMENT_STATUS } from "@/lib/labels";
 import { useApiData } from "@/lib/hooks";
-import type { Page, Payment, Project, ProjectListItem } from "@/types/api";
+import Link from "next/link";
+
+import type {
+  Currency,
+  CurrencyTotals,
+  Page,
+  Payment,
+  Project,
+  ProjectListItem,
+} from "@/types/api";
 
 const PAGE_SIZE = 10;
 
@@ -46,6 +55,15 @@ export function PaymentsTab({
     [project.id, status, page, refreshToken],
   );
 
+  const accounting = useApiData<{ totals: CurrencyTotals[] }>(
+    (signal) =>
+      api.get<{ totals: CurrencyTotals[] }>(
+        `/accounting/projects/${project.id}/totals`,
+        signal,
+      ),
+    [project.id, refreshToken],
+  );
+
   const projectAsList: ProjectListItem[] = [
     {
       ...project,
@@ -59,6 +77,58 @@ export function PaymentsTab({
 
   return (
     <div className="space-y-4">
+      {(accounting.data?.totals.length ?? 0) > 0 && (
+        <div className="panel p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-xs font-semibold">مانده حساب</h3>
+            <Link
+              href="/accounting?tab=receipts"
+              className="text-[11px] text-accent hover:underline"
+            >
+              بررسی رسیدها و تخصیص
+            </Link>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {accounting.data?.totals.map((total) => (
+              <div
+                key={total.currency}
+                className="rounded-xl border border-line/60 bg-black/10 p-2.5 text-[11px]"
+              >
+                <div className="mb-1 flex items-center justify-between text-muted">
+                  <span>{total.currency}</span>
+                  <span className={total.settled ? "text-success" : "text-warning"}>
+                    {total.settled ? "تسویه" : "بدهی باز"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted">بدهی</span>
+                  <span>{formatAmount(total.debt_minor, total.currency as Currency)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted">مانده</span>
+                  <span className={total.balance_minor ? "text-warning" : "text-success"}>
+                    {formatAmount(total.balance_minor, total.currency as Currency)}
+                  </span>
+                </div>
+                {total.credit_minor > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted">اعتبار</span>
+                    <span>
+                      {formatAmount(total.credit_minor, total.currency as Currency)}
+                    </span>
+                  </div>
+                )}
+                {total.pending_receipts > 0 && (
+                  <div className="mt-1 text-warning">
+                    {total.pending_receipts} رسید در انتظار بررسی
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 items-center gap-2">
           <select
