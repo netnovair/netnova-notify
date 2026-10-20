@@ -124,7 +124,10 @@ def handle_ticket_notify(
             f"{preview}\n\n"
             "برای پاسخ به پنل مدیریت مراجعه کنید."
         )
-        adapter.send_message(settings.admin_telegram_chat_id, text)
+        keyboard = url_keyboard(
+            [[("پاسخ در پنل", f"{settings.next_public_site_url.rstrip('/')}/tickets")]]
+        )
+        adapter.send_message(settings.admin_telegram_chat_id, text, keyboard)
         _forward_attachments(adapter, settings.admin_telegram_chat_id, message)
         return
 
@@ -208,7 +211,14 @@ def handle_receipt_submitted(
     lines.append("")
     lines.append("برای تایید یا رد، در پنل مدیریت بخش پرداخت ها را باز کنید.")
     keyboard = url_keyboard(
-        [[("باز کردن پنل", f"{settings.next_public_site_url.rstrip('/')}/payments")]]
+        [
+            [
+                (
+                    "بررسی رسید در پنل",
+                    f"{settings.next_public_site_url.rstrip('/')}/accounting?tab=receipts",
+                )
+            ]
+        ]
     )
     adapter.send_message(settings.admin_telegram_chat_id, "\n".join(lines), keyboard)
     for file in receipt.files:

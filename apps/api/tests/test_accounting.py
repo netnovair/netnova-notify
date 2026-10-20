@@ -505,6 +505,8 @@ def test_receipt_with_photo_notifies_admin_with_the_image(
     ]
     assert alerts, [(m["chat_id"], m["text"][:40]) for m in mock_adapter.sent]
     assert "1,500,000 تومان" in alerts[-1]["text"]
+    buttons = alerts[-1]["keyboard"]["inline_keyboard"]
+    assert buttons[0][0]["url"].endswith("/accounting?tab=receipts")
     media = [
         message
         for message in mock_adapter.sent

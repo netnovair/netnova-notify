@@ -276,3 +276,27 @@ def test_photo_without_ticket_conversation_is_explained(
     telegram_update(admin_client, telegram_id=910005, photo=True)
     message = last_message(mock_adapter)["text"]
     assert "برای ارسال تصویر" in message
+
+
+def test_admin_ticket_alert_links_back_to_the_panel(
+    admin_client: TestClient, mock_adapter, monkeypatch
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "admin_telegram_chat_id", 555002)
+    _project_with_employer(admin_client, 910007)
+
+    telegram_update(admin_client, telegram_id=910007, callback_data="0:newticket")
+    telegram_update(admin_client, telegram_id=910007, text="سوال فنی")
+    telegram_update(admin_client, telegram_id=910007, text="دسترسی پنل کار نمی کند.")
+
+    run_worker(mock_adapter)
+    alerts = [
+        message
+        for message in mock_adapter.sent
+        if message["chat_id"] == 555002 and "تیکت جدید" in message["text"]
+    ]
+    assert alerts, [(m["chat_id"], m["text"][:40]) for m in mock_adapter.sent]
+    buttons = alerts[-1]["keyboard"]["inline_keyboard"]
+    assert buttons[0][0]["url"].endswith("/tickets")
+    assert buttons[0][0]["text"] == "پاسخ در پنل"
