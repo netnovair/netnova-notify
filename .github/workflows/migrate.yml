@@ -5,6 +5,8 @@ name: Migrate database
 #
 # * `push` to main that adds/changes a revision applies `alembic upgrade head`
 #   automatically, so a release never runs ahead of its schema.
+# * A change to this workflow itself also runs it, so the first release after
+#   adding it upgrades the live schema without waiting for a manual dispatch.
 # * `workflow_dispatch` can also inspect the live revision (`current`) or verify
 #   that models and database agree (`check`).
 on:
@@ -22,6 +24,7 @@ on:
     branches: [main]
     paths:
       - "apps/api/alembic/versions/**"
+      - ".github/workflows/migrate.yml"
 
 concurrency:
   group: migrate-database
