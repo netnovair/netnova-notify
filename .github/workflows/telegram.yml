@@ -1,0 +1,39 @@
+name: Telegram webhook
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "set | status | delete"
+        required: true
+        default: set
+
+jobs:
+  webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Telegram API
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          HOOK="https://netnova-api.onrender.com/api/v1/telegram/webhook"
+
+          case "$ACTION" in
+            set)
+              curl -sS -X POST "https://api.telegram.org/bot$TOKEN/setWebhook" \
+                --data-urlencode "url=$HOOK" \
+                --data-urlencode "secret_token=$SECRET" \
+                --data-urlencode 'allowed_updates=["message","callback_query"]'
+              echo
+              ;;
+            delete)
+              curl -sS -X POST "https://api.telegram.org/bot$TOKEN/deleteWebhook"
+              echo
+              ;;
+          esac
+
+          curl -sS "https://api.telegram.org/bot$TOKEN/getWebhookInfo"
+          echo
