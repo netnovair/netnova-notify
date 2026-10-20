@@ -1,0 +1,54 @@
+name: Queue worker
+
+# Drains scheduled_jobs (announcements, payment reminders, approval welcomes,
+# ticket alerts) even when the API host cannot run a background worker.
+#
+# This complements EMBEDDED_WORKER on the API: when the free Render instance has
+# spun down after 15 idle minutes, embedded processing stops with it. This cron
+# keeps the queue moving regardless, and its run also writes the worker
+# heartbeat that the panel shows.
+on:
+  schedule:
+    # GitHub's minimum interval. Scheduled runs can start a few minutes late.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: queue-worker
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: pip install -r apps/api/requirements.txt
+
+      - name: Process due jobs
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_ADAPTER: http
+          ADMIN_TELEGRAM_CHAT_ID: ${{ secrets.ADMIN_TELEGRAM_CHAT_ID }}
+          ENVIRONMENT: production
+          COOKIE_SECURE: "true"
+          CORS_ORIGINS: https://netnova-web.onrender.com
+          JOB_MAX_ATTEMPTS: "4"
+          JOB_BACKOFF_BASE_SECONDS: "30"
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "DATABASE_URL secret is not set." >&2
+            exit 1
+          fi
+          python -m app.worker.main --once --worker-id "github-${{ github.run_id }}"

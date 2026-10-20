@@ -209,12 +209,18 @@ Never contains tokens or secrets; `bot_configured` is a boolean only.
 | GET | `/tickets/{id}` | Thread; marks the admin side as read |
 | POST | `/tickets` | Admin opens a ticket for a project (`project_id`, `subject`, `body`, `priority`) |
 | POST | `/tickets/{id}/reply` | `{ "body": "..." }`; status becomes `pending_employer` |
+| POST | `/tickets/{id}/attachments` | `multipart/form-data`: `body` (optional) + 1–4 `files`; each ≤ 5 MB JPEG/PNG/WebP/GIF |
+| GET | `/tickets/attachments/{id}` | Admin-only image bytes (`no-store`, `nosniff`, RFC 5987 filename) |
 | PATCH | `/tickets/{id}/status` | `{ "status": "open|pending_admin|pending_employer|closed" }` |
 
 Statuses: `open`, `pending_admin` (employer waiting), `pending_employer` (admin replied),
 `closed`. A reply to a closed ticket reopens it. An admin reply queues a short Telegram
 notice for the employer; an employer message queues a notice for `ADMIN_TELEGRAM_CHAT_ID`.
-Neither notice contains the full thread.
+Neither notice contains the full thread, but stored images are re-uploaded to Telegram so
+both sides can see them. `TicketMessageOut.attachments[]` only exposes
+`id/filename/content_type/size_bytes`; the bytes are fetched from the endpoint above, so
+the JSON is never inflated with image data. The bot accepts photos (largest size) and
+image documents during the ticket subject/body/reply steps; anything else is rejected.
 
 ### Service catalog and orders
 
@@ -225,9 +231,14 @@ Neither notice contains the full thread.
 | POST | `/catalog/categories` | Create a main service |
 | PATCH | `/catalog/categories/{id}` | Update title, emoji, description, order, flags, portfolio text/url |
 | DELETE | `/catalog/categories/{id}` | `409 category_in_use` once orders reference it |
-| POST | `/catalog/categories/{id}/items` | Create a sub service with its questions |
+| POST | `/catalog/categories/{id}/items?parent_id=<uuid>` | Create a node; without `parent_id` it is top level, with it a child (depth ≤ 4) |
 | PATCH | `/catalog/items/{id}` | Update a sub service; `questions` replaces the list when present |
-| DELETE | `/catalog/items/{id}` | `409 item_in_use` once orders reference it |
+| DELETE | `/catalog/items/{id}` | `409 item_in_use` once any node of the subtree has orders |
+
+Every item payload includes `parent_id`, `level`, `children[]` and `is_group` (true when
+the node has children; the bot then asks to choose instead of asking its questions).
+`400 max_depth` rejects a fifth level and `409` a duplicate sibling key. Orders expose
+`service_path` («دسته › سطح ۱ › سطح ۲»), a snapshot taken at submit time.
 
 ```json
 {

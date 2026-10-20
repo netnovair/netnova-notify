@@ -101,6 +101,8 @@ class ItemIn(BaseModel):
 
 class ItemOut(ORMModel):
     id: uuid.UUID
+    parent_id: uuid.UUID | None = None
+    level: int
     key: str
     title: str
     description: str
@@ -110,6 +112,10 @@ class ItemOut(ORMModel):
     portfolio_text: str
     portfolio_url: str
     questions: list[QuestionOut]
+    children: list[ItemOut]
+    #: True when the node has children, i.e. the bot asks to choose instead of
+    #: asking this node's own questions.
+    is_group: bool = False
 
 
 class CategoryIn(BaseModel):
@@ -162,6 +168,7 @@ class RequestListItem(ORMModel):
     id: uuid.UUID
     category_title: str
     item_title: str
+    service_path: str = ""
     contact_name: str
     contact_phone: str
     status: str

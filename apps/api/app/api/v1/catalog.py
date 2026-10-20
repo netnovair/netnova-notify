@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import AdminContext, get_admin_context
+from app.core.errors import not_found
 from app.db.session import get_db
 from app.schemas.catalog import (
     CatalogOut,
@@ -57,8 +58,7 @@ def create_category(
 ) -> CategoryOut:
     category = CatalogService.create_category(db, payload=payload, actor=ctx.actor)
     db.commit()
-    db.refresh(category)
-    return category_out(category)
+    return category_out(CatalogService.category_detail(db, category))
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryOut)
@@ -71,8 +71,7 @@ def update_category(
     category = CatalogService.get_category(db, category_id)
     CatalogService.update_category(db, category=category, payload=payload, actor=ctx.actor)
     db.commit()
-    db.refresh(category)
-    return category_out(category)
+    return category_out(CatalogService.category_detail(db, category))
 
 
 @router.delete("/categories/{category_id}", status_code=204)
@@ -91,14 +90,26 @@ def delete_category(
 def create_item(
     category_id: uuid.UUID,
     payload: ItemIn,
+    parent_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     ctx: AdminContext = Depends(get_admin_context),
 ) -> ItemOut:
+    """Create a node of the service tree.
+
+    Omit ``parent_id`` for a first-level service; pass an existing node id to add
+    a child (the bot then shows children instead of asking questions).
+    """
     category = CatalogService.get_category(db, category_id)
-    item = CatalogService.create_item(db, category=category, payload=payload, actor=ctx.actor)
+    parent = None
+    if parent_id is not None:
+        parent = CatalogService.find_item(category, parent_id)
+        if parent is None:
+            raise not_found("زیرشاخه والد در این خدمت یافت نشد.")
+    item = CatalogService.create_item(
+        db, category=category, payload=payload, actor=ctx.actor, parent=parent
+    )
     db.commit()
-    db.refresh(item)
-    return item_out(item)
+    return item_out(CatalogService.node_detail(db, item))
 
 
 @router.patch("/items/{item_id}", response_model=ItemOut)
@@ -112,7 +123,7 @@ def update_item(
     CatalogService.update_item(db, item=item, payload=payload, actor=ctx.actor)
     db.commit()
     db.refresh(item)
-    return item_out(item)
+    return item_out(CatalogService.node_detail(db, item))
 
 
 @router.delete("/items/{item_id}", status_code=204)

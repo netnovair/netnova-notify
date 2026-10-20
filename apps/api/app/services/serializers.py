@@ -7,7 +7,7 @@ from datetime import datetime
 from app.domain.licenses import effective_status
 from app.domain.payments import is_overdue
 from app.models.audit import AuditLog
-from app.models.catalog import ServiceCategory, ServiceItem, ServiceRequest
+from app.models.catalog import ServiceRequest
 from app.models.license import License
 from app.models.notification import Notification
 from app.models.payment import Payment
@@ -27,7 +27,12 @@ from app.schemas.member import MemberOut
 from app.schemas.notification import DeliveryOut, NotificationListItem, NotificationOut
 from app.schemas.payment import PaymentOut
 from app.schemas.project import FeatureOut, ProjectListItem, ProjectOut, feature_outputs
-from app.schemas.ticket import TicketDetail, TicketListItem, TicketMessageOut
+from app.schemas.ticket import (
+    TicketAttachmentOut,
+    TicketDetail,
+    TicketListItem,
+    TicketMessageOut,
+)
 
 
 def member_display_name(member: ProjectMember) -> str:
@@ -325,6 +330,15 @@ def ticket_detail(ticket, now: datetime) -> TicketDetail:
                 body=message.body,
                 channel=message.channel,
                 created_at=message.created_at,
+                attachments=[
+                    TicketAttachmentOut(
+                        id=attachment.id,
+                        filename=attachment.filename,
+                        content_type=attachment.content_type,
+                        size_bytes=attachment.size_bytes,
+                    )
+                    for attachment in message.attachments
+                ],
             )
             for message in ticket.messages
         ],
@@ -352,10 +366,12 @@ def question_out(question) -> QuestionOut:
     )
 
 
-def item_out(item: ServiceItem) -> ItemOut:
-    questions = sorted(item.questions, key=lambda row: row.order_index)
+def item_out(item) -> ItemOut:
+    children = sorted(item.children, key=lambda row: row.order_index)
     return ItemOut(
         id=item.id,
+        parent_id=item.parent_id,
+        level=item.level,
         key=item.key,
         title=item.title,
         description=item.description,
@@ -364,11 +380,13 @@ def item_out(item: ServiceItem) -> ItemOut:
         show_portfolio=item.show_portfolio,
         portfolio_text=item.portfolio_text,
         portfolio_url=item.portfolio_url,
-        questions=[question_out(question) for question in questions],
+        questions=[question_out(question) for question in item.questions],
+        children=[item_out(child) for child in children],
+        is_group=bool(children),
     )
 
 
-def category_out(category: ServiceCategory) -> CategoryOut:
+def category_out(category) -> CategoryOut:
     items = sorted(category.items, key=lambda row: row.order_index)
     return CategoryOut(
         id=category.id,
@@ -390,6 +408,7 @@ def request_list_item(request: ServiceRequest) -> RequestListItem:
         id=request.id,
         category_title=request.category_title,
         item_title=request.item_title,
+        service_path=request.service_path,
         contact_name=request.contact_name,
         contact_phone=request.contact_phone,
         status=request.status,

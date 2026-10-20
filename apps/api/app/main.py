@@ -15,6 +15,7 @@ from app.core.logging import setup_logging
 from app.db.session import SessionLocal
 from app.services.auth import AuthService
 from app.services.telegram_bot import BOT_COMMANDS
+from app.worker.embedded import EmbeddedWorker
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -37,6 +38,12 @@ async def lifespan(_: FastAPI):
             )
     finally:
         db.close()
+    embedded_worker: EmbeddedWorker | None = None
+    if settings.embedded_worker and settings.environment != "test":
+        from app.adapters.telegram.factory import get_telegram_adapter
+
+        embedded_worker = EmbeddedWorker(settings, get_telegram_adapter())
+        embedded_worker.start()
     if settings.telegram_mode == "http":
         # Idempotent and cheap; keeps /start, /menu, /cancel and /help discoverable.
         try:
@@ -45,7 +52,11 @@ async def lifespan(_: FastAPI):
             get_telegram_adapter().set_my_commands(BOT_COMMANDS)
         except Exception:  # noqa: BLE001 - never block startup on Telegram
             logger.warning("Could not register Telegram bot commands at startup.")
-    yield
+    try:
+        yield
+    finally:
+        if embedded_worker is not None:
+            embedded_worker.stop()
 
 
 app = FastAPI(

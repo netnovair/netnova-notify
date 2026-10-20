@@ -4,12 +4,14 @@ import clsx from "clsx";
 import {
   ArrowLeft,
   CheckCheck,
+  ImagePlus,
   MessageSquarePlus,
   RefreshCw,
   Send,
+  X,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -17,10 +19,16 @@ import { Modal } from "@/components/ui/Modal";
 import { EmptyState, ErrorState, InlineAlert, SkeletonRows } from "@/components/ui/States";
 import { useToast } from "@/components/ui/Toast";
 import { api, errorMessage, queryString } from "@/lib/api";
-import { formatDateTime, formatRelative } from "@/lib/format";
+import { formatDateTime, formatNumber, formatRelative } from "@/lib/format";
 import { useApiData } from "@/lib/hooks";
 import { TICKET_PRIORITY, TICKET_STATUS } from "@/lib/labels";
-import type { Page, ProjectListItem, Ticket, TicketListItem } from "@/types/api";
+import type {
+  Page,
+  ProjectListItem,
+  Ticket,
+  TicketAttachment,
+  TicketListItem,
+} from "@/types/api";
 
 const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: "", label: "همه" },
@@ -28,6 +36,63 @@ const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: "pending_employer", label: "در انتظار کارفرما" },
   { value: "closed", label: "بسته شده" },
 ];
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGES = 4;
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${formatNumber(bytes)} بایت`;
+  return `${formatNumber(Math.round(bytes / 1024))} کیلوبایت`;
+}
+
+function AttachmentImage({ attachment }: { attachment: TicketAttachment }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    api
+      .getBlob(`/tickets/attachments/${attachment.id}`)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.id]);
+
+  return (
+    <figure className="max-w-full overflow-hidden rounded-lg border border-line bg-bg/60">
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" title="باز کردن تصویر">
+          <img
+            src={url}
+            alt={attachment.filename}
+            className="max-h-44 w-auto max-w-full object-contain"
+          />
+        </a>
+      ) : failed ? (
+        <div className="px-3 py-6 text-[10px] text-muted">تصویر در دسترس نیست</div>
+      ) : (
+        <div className="h-24 w-32 animate-pulse bg-white/5" aria-label="در حال بارگذاری تصویر" />
+      )}
+      <figcaption className="px-2 py-1 text-[9px] text-muted">
+        {attachment.filename} · {formatFileSize(attachment.size_bytes)}
+      </figcaption>
+    </figure>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const spec = TICKET_STATUS[status] ?? { label: status, tone: "neutral" as const };
@@ -47,17 +112,60 @@ function TicketDetailPanel({
     [ticketId],
   );
   const [reply, setReply] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  function pickFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    const accepted: File[] = [];
+    for (const file of picked) {
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        setError("فقط تصویر JPEG، PNG، WebP یا GIF پذیرفته می شود.");
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setError("حجم هر تصویر حداکثر ۵ مگابایت است.");
+        continue;
+      }
+      accepted.push(file);
+    }
+    const next = [...files, ...accepted];
+    if (next.length > MAX_IMAGES) {
+      setError(`حداکثر ${formatNumber(MAX_IMAGES)} تصویر در هر پیام ارسال کنید.`);
+    }
+    setFiles(next.slice(0, MAX_IMAGES));
+  }
+
+  function removeFile(index: number) {
+    setFiles(files.filter((_, position) => position !== index));
+  }
 
   async function sendReply() {
-    if (!ticket.data || reply.trim().length < 2) return;
+    if (!ticket.data) return;
+    const text = reply.trim();
+    if (files.length === 0 && text.length < 2) return;
     setBusy(true);
     setError(null);
     try {
-      await api.post(`/tickets/${ticketId}/reply`, { body: reply.trim() });
+      if (files.length > 0) {
+        const form = new FormData();
+        form.set("body", text);
+        files.forEach((file) => form.append("files", file, file.name));
+        await api.upload(`/tickets/${ticketId}/attachments`, form);
+      } else {
+        await api.post(`/tickets/${ticketId}/reply`, { body: text });
+      }
       setReply("");
-      notify("پاسخ ثبت شد و برای کارفرما در تلگرام ارسال می شود.", "success");
+      setFiles([]);
+      notify(
+        files.length > 0
+          ? "پاسخ و تصویرها ثبت شد و برای کارفرما در تلگرام ارسال می شود."
+          : "پاسخ ثبت شد و برای کارفرما در تلگرام ارسال می شود.",
+        "success",
+      );
       ticket.reload();
       onChanged();
     } catch (err) {
@@ -135,6 +243,13 @@ function TicketDetailPanel({
                 <span>{formatDateTime(message.created_at)}</span>
               </div>
               <p className="whitespace-pre-wrap">{message.body}</p>
+              {message.attachments.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {message.attachments.map((attachment) => (
+                    <AttachmentImage key={attachment.id} attachment={attachment} />
+                  ))}
+                </div>
+              ) : null}
               <p className="mt-1 text-[9px] text-muted/70">
                 کانال: {message.channel === "telegram" ? "ربات تلگرام" : "پنل مدیریت"}
               </p>
@@ -161,8 +276,51 @@ function TicketDetailPanel({
           className="w-full resize-y rounded-lg border border-line bg-bg/60 px-3 py-2 text-xs leading-6 outline-none focus:border-accent/60"
           placeholder="پاسخ برای کارفرما..."
         />
-        <div className="mt-2 flex justify-end">
-          <Button size="sm" onClick={() => void sendReply()} loading={busy} disabled={reply.trim().length < 2}>
+        {files.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {files.map((file, index) => (
+              <span
+                key={`${file.name}-${index}`}
+                className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px]"
+              >
+                {file.name}
+                <button
+                  type="button"
+                  onClick={() => removeFile(index)}
+                  aria-label={`حذف ${file.name}`}
+                  className="text-muted hover:text-ink"
+                >
+                  <X size={11} aria-hidden />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            hidden
+            onChange={pickFiles}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => fileInput.current?.click()}
+            disabled={busy || files.length >= MAX_IMAGES}
+            title="افزودن تصویر (حداکثر ۵ مگابایت)"
+          >
+            <ImagePlus size={13} aria-hidden />
+            تصویر
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void sendReply()}
+            loading={busy}
+            disabled={files.length === 0 && reply.trim().length < 2}
+          >
             <Send size={13} aria-hidden />
             ارسال پاسخ
           </Button>

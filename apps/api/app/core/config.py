@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str | None = None
     bootstrap_admin_name: str = "مدیر نت نووا"
 
+    #: Drain the job queue inside the API process. Required where the host
+    #: cannot run a separate worker (Render free has no background workers).
+    embedded_worker: bool = False
     worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
     worker_batch_size: int = Field(default=10, ge=1, le=100)
     worker_stale_seconds: int = Field(default=300, ge=30)

@@ -348,3 +348,125 @@ def test_orders_api_lists_filters_and_updates_status(
     search = admin_client.get("/api/v1/orders", params={"search": "رحیمی"})
     assert search.json()["total"] == 1
     assert admin_client.get("/api/v1/orders", params={"search": "ناموجود"}).json()["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-level service tree
+# ---------------------------------------------------------------------------
+def test_nested_tree_walks_to_a_leaf(admin_client: TestClient, mock_adapter) -> None:
+    _seed_catalog(admin_client)
+    # Seed order: گرافیک، سایت، اپ، محتوا، سئو
+    APP = 2
+
+    _start_order(admin_client, 700777)
+    _pick(admin_client, 700777, f"oc:{APP}")
+    labels = _button_labels(last_message(mock_adapter))
+    # A group is marked as such so the visitor knows another step follows.
+    assert "اپلیکیشن اندروید …" in labels
+    assert "نسخه تحت وب (مناسب iOS) …" in labels
+
+    _pick(admin_client, 700777, f"oi:{APP}:0")  # اندروید
+    android_labels = _button_labels(last_message(mock_adapter))
+    assert "فروشگاهی" in android_labels
+    assert "خدماتی" in android_labels
+
+    _pick(admin_client, 700777, f"oi:{APP}:0:0")  # اندروید › فروشگاهی
+    assert "نام و نام خانوادگی" in last_message(mock_adapter)["text"]
+    _register_contact(admin_client, 700777, "نگار سعیدی", "09123334455")
+    assert "سوال ۱ از ۵" in last_message(mock_adapter)["text"]
+
+    # Back navigation returns to the sibling list without losing the flow.
+    _pick(admin_client, 700777, "oup")
+    assert "فروشگاهی" in _button_labels(last_message(mock_adapter))
+    _pick(admin_client, 700777, "oup")
+    assert "کدام خدمت را نیاز دارید؟" in last_message(mock_adapter)["text"]
+    _pick(admin_client, 700777, f"oi:{APP}:0:1")  # اندروید › خدماتی
+    assert "سوال ۱ از" in last_message(mock_adapter)["text"]
+
+
+def test_child_service_crud_and_depth_limit(admin_client: TestClient, mock_adapter) -> None:
+    catalog = _seed_catalog(admin_client)
+    content = next(row for row in catalog["categories"] if row["key"] == "content")
+    article = content["items"][0]
+
+    child = admin_client.post(
+        f"/api/v1/catalog/categories/{content['id']}/items",
+        params={"parent_id": article["id"]},
+        json={
+            "title": "مقاله تخصصی",
+            "questions": [{"label": "موضوع دقیق مقاله", "field_type": "text"}],
+        },
+    )
+    assert child.status_code == 201, child.text
+    payload = child.json()
+    assert payload["level"] == 2
+    assert payload["parent_id"] == article["id"]
+    assert payload["is_group"] is False
+
+    listed = admin_client.get("/api/v1/catalog").json()
+    parent = next(
+        row
+        for row in next(c for c in listed["categories"] if c["key"] == "content")["items"]
+        if row["id"] == article["id"]
+    )
+    assert parent["is_group"] is True
+    assert [node["title"] for node in parent["children"]] == ["مقاله تخصصی"]
+
+    # The group itself is never a leaf in the bot: it asks to choose a child.
+    _start_order(admin_client, 700888)
+    _pick(admin_client, 700888, "oc:3")
+    assert "مقاله فارسی …" in _button_labels(last_message(mock_adapter))
+    _pick(admin_client, 700888, "oi:3:0")
+    assert "مقاله تخصصی" in _button_labels(last_message(mock_adapter))
+
+    # Depth guard: level 4 is the maximum, so a level-4 node cannot get children.
+    third = admin_client.post(
+        f"/api/v1/catalog/categories/{content['id']}/items",
+        params={"parent_id": payload["id"]},
+        json={"title": "سطح سه"},
+    )
+    assert third.status_code == 201, third.text
+    fourth = admin_client.post(
+        f"/api/v1/catalog/categories/{content['id']}/items",
+        params={"parent_id": third.json()["id"]},
+        json={"title": "سطح چهار"},
+    )
+    assert fourth.status_code == 201, fourth.text
+    too_deep = admin_client.post(
+        f"/api/v1/catalog/categories/{content['id']}/items",
+        params={"parent_id": fourth.json()["id"]},
+        json={"title": "سطح پنج"},
+    )
+    assert too_deep.status_code == 400, too_deep.text
+    assert too_deep.json()["error"]["code"] == "max_depth"
+
+    # Deleting the subtree is allowed only when no order references it.
+    deleted = admin_client.delete(f"/api/v1/catalog/items/{payload['id']}")
+    assert deleted.status_code == 204, deleted.text
+
+
+def test_order_snapshot_keeps_the_full_path(admin_client: TestClient, mock_adapter) -> None:
+    _seed_catalog(admin_client)
+    APP = 2
+    _start_order(admin_client, 700999)
+    _pick(admin_client, 700999, f"oc:{APP}")
+    _pick(admin_client, 700999, f"oi:{APP}:1")  # نسخه تحت وب
+    _pick(admin_client, 700999, f"oi:{APP}:1:0")  # فروشگاهی
+    _register_contact(admin_client, 700999, "علی موسوی", "09120001122")
+    for _ in range(len(last_message(mock_adapter)["text"])):
+        pass
+    # Answer the five app questions.
+    telegram_update(admin_client, telegram_id=700999, text="بیشتر اندروید")
+    telegram_update(admin_client, telegram_id=700999, text="زیر ۱۰۰۰")
+    telegram_update(admin_client, telegram_id=700999, text="سبد خرید و پنل مدیریت")
+    _pick(admin_client, 700999, "oq:3:1")
+    _pick(admin_client, 700999, "oskip")
+    assert "بازبینی سفارش" in last_message(mock_adapter)["text"]
+    assert "نسخه تحت وب (مناسب iOS) › فروشگاهی" in last_message(mock_adapter)["text"]
+    _pick(admin_client, 700999, "osubmit")
+
+    order = _order_rows()[-1]
+    assert order.item_title == "فروشگاهی"
+    assert order.service_path == "طراحی اپلیکیشن › نسخه تحت وب (مناسب iOS) › فروشگاهی"
+    detail = admin_client.get(f"/api/v1/orders/{order.id}").json()
+    assert detail["service_path"].endswith("فروشگاهی")

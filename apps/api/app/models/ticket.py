@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -117,6 +118,45 @@ class TicketMessage(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     ticket: Mapped[Ticket] = relationship(back_populates="messages")
+    attachments: Mapped[list[TicketAttachment]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        order_by="TicketAttachment.created_at",
+        lazy="selectin",
+    )
+
+
+class TicketAttachment(UUIDPrimaryKeyMixin, Base):
+    """One image attached to a ticket message, stored in the database.
+
+    Bytes live in PostgreSQL because free hosting has an ephemeral disk and no
+    object storage budget; the row is deleted with its message and ticket.
+    """
+
+    __tablename__ = "ticket_attachments"
+    __table_args__ = (
+        CheckConstraint("size_bytes > 0 AND size_bytes <= 5242880", name="attachment_size_valid"),
+        Index("ix_ticket_attachments_ticket", "ticket_id", "created_at"),
+        Index("ix_ticket_attachments_message", "message_id"),
+    )
+
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ticket_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(120), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Deferred: ticket lists and alerts load attachment metadata (name, size,
+    #: type) all the time, but the bytes are only needed by the download endpoint
+    #: and the Telegram forwarder.
+    data: Mapped[bytes] = mapped_column(LargeBinary, deferred=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    message: Mapped[TicketMessage] = relationship(back_populates="attachments")
 
 
 class TelegramConversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -320,3 +320,61 @@ def test_unknown_job_kind_fails_safely() -> None:
         assert row is not None
         assert row.status == "failed"
         assert "Unknown job kind" in (row.last_error or "")
+
+
+# ---------------------------------------------------------------------------
+# Embedded worker (Render has no separate worker process on the free plan)
+# ---------------------------------------------------------------------------
+def test_embedded_worker_drains_the_queue(admin_client: TestClient) -> None:
+    import time
+
+    from app.worker.embedded import EmbeddedWorker
+
+    project = _project_with_employer(admin_client)
+    notification = _create_notification(admin_client, project["id"])
+    adapter = MockTelegramAdapter()
+    embedded = EmbeddedWorker(
+        settings,
+        adapter,
+        worker_id="embedded-test",
+        poll_interval=0.1,
+    )
+    embedded.start()
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            with SessionLocal() as db:
+                row = db.get(Notification, uuid.UUID(notification["id"]))
+                if row is not None and row.status == "sent":
+                    break
+            time.sleep(0.1)
+    finally:
+        embedded.stop()
+
+    with SessionLocal() as db:
+        row = db.get(Notification, uuid.UUID(notification["id"]))
+        assert row is not None
+        assert row.status == "sent", row.status
+    assert any("اطلاعیه ورکر" in entry["text"] for entry in adapter.sent)
+    assert not embedded.running
+
+
+def test_queue_state_is_honest() -> None:
+    from app.schemas.dashboard import WorkerStatus
+    from app.services.status import StatusService
+
+    now = utcnow()
+    online = WorkerStatus(status="online", last_seen_at=now, hostname="w")
+    offline = WorkerStatus(status="offline", last_seen_at=None, hostname=None)
+    oldest = now - timedelta(seconds=120)
+
+    assert StatusService.queue_state(0, offline, None, now) == ("idle", None)
+    assert StatusService.queue_state(3, online, oldest, now) == ("draining", 120)
+    assert StatusService.queue_state(3, offline, oldest, now) == ("stalled", 120)
+
+
+def test_system_status_exposes_queue_state(admin_client: TestClient) -> None:
+    payload = admin_client.get("/api/v1/system/status").json()
+    assert payload["queue_status"] in {"idle", "draining", "stalled"}
+    assert "embedded_worker" in payload
+    assert "oldest_pending_seconds" in payload

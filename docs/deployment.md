@@ -146,7 +146,35 @@ docker compose --env-file .env -f infra/docker-compose.yml exec api \
 The command requires `TELEGRAM_ADAPTER=http` and a webhook secret. Verify in the panel:
 Settings → Telegram shows «ربات واقعی» and «Secret وب هوک: تنظیم شده».
 
-### 3.5 First login
+### 3.5 Hosts without a paid worker (Render Free)
+
+Render's free plan has **no background workers and no cron jobs**; a separate
+`python -m app.worker.main` service requires a paid plan. On a free instance the queue
+would therefore never drain and announcements, payment reminders and ticket alerts
+would stay in `queued` forever. Two free pieces solve this:
+
+1. **Embedded worker** - set `EMBEDDED_WORKER=true` on the API service. A thread inside
+   the API process calls the same `Worker.run_once` loop as the standalone worker, so
+   every request or health check that keeps the instance awake also drains due jobs.
+   The heartbeat (`system_state.worker_heartbeat`) is written by the same loop.
+   Leave it `false` when a dedicated worker container/service is running.
+2. **GitHub Actions fallback** - `.github/workflows/worker.yml` runs
+   `python -m app.worker.main --once` every 5 minutes (GitHub's minimum schedule) with
+   the repository secrets `DATABASE_URL`, `SECRET_KEY`, `TELEGRAM_BOT_TOKEN` and
+   `TELEGRAM_WEBHOOK_SECRET`. It keeps the queue moving while the free web instance is
+   spun down after 15 idle minutes, and it also refreshes the heartbeat.
+   Scheduled workflows only run from the default branch and are disabled after 60 days
+   of repository inactivity; re-enable them from the Actions tab if that happens.
+
+A queue item can therefore be up to ~5-10 minutes late on the free plan. For
+time-critical sending, run a paid worker or move the API to an always-on host; nothing
+else in the application changes.
+
+The panel shows the difference: Settings -> Worker and the dashboard banner read
+`queue_status` (`stalled` means jobs are waiting with no fresh heartbeat), plus
+`embedded_worker`, `oldest_pending_seconds` and the heartbeat age.
+
+### 3.6 First login
 
 Open `https://notify.example.com`, sign in with `BOOTSTRAP_ADMIN_EMAIL` /
 `BOOTSTRAP_ADMIN_PASSWORD`. The bootstrap account is created **only** when no admin
@@ -278,7 +306,7 @@ docker compose --env-file .env -f infra/docker-compose.yml exec -T db \
 | Liveness | `GET /api/v1/health/live` → `200` |
 | Readiness | `GET /api/v1/health/ready` → `200`, `503` if DB is down |
 | Worker | Panel Settings or `GET /api/v1/system/status` → `worker.status` |
-| Queue | `pending_jobs`, `failed_jobs` in `/system/status` |
+| Queue | `pending_jobs`, `failed_jobs`, `queue_status` in `/system/status` (`stalled` = jobs waiting, no fresh heartbeat) |
 | API errors | Container logs (`api`, `worker`), filtered for secrets |
 | API schema | Disabled in production (`/api/docs` and `/api/openapi.json` return 404) |
 | Disk usage | PostgreSQL volume and Docker logs |

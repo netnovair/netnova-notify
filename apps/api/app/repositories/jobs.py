@@ -121,6 +121,12 @@ class JobRepository:
         )
 
     @staticmethod
+    def oldest_pending_at(db: Session) -> datetime | None:
+        return db.scalar(
+            select(func.min(ScheduledJob.run_at)).where(ScheduledJob.status == "pending")
+        )
+
+    @staticmethod
     def failed_count(db: Session) -> int:
         return int(
             db.scalar(select(func.count(ScheduledJob.id)).where(ScheduledJob.status == "failed"))

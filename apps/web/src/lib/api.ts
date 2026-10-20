@@ -102,13 +102,16 @@ export function loadBearerToken(): string | null {
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
+  /** Multipart upload; mutually exclusive with `body`. */
+  formData?: FormData;
+  /** Return the response as a Blob instead of parsing JSON. */
+  raw?: boolean;
   signal?: AbortSignal;
   /** Skip the global 401 broadcast (used by the session check itself). */
   silentAuth?: boolean;
 };
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const method = options.method ?? "GET";
+function authHeaders(): Record<string, string> {
   // Re-hydrate on every request: Fast Refresh re-executes this module and clears
   // the in-memory value, which used to make the panel silently drop the session.
   if (!bearerToken) {
@@ -121,7 +124,39 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     // token travels in a custom header as well. The API accepts either one.
     headers["X-NN-Session"] = bearerToken;
   }
-  if (options.body !== undefined) {
+  return headers;
+}
+
+function apiError(status: number, data: unknown, silentAuth = false): ApiError {
+  const body = (data ?? {}) as ApiErrorBody;
+  if (status === 401 && !silentAuth && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("nn:unauthorized"));
+  }
+  return new ApiError(
+    status,
+    body.error?.code ?? `http_${status}`,
+    body.error?.message ?? "درخواست انجام نشد. لطفا دوباره تلاش کنید.",
+    body.error?.details,
+  );
+}
+
+async function parseError(response: Response, silentAuth = false): Promise<ApiError> {
+  const text = await response.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+  }
+  return apiError(response.status, data, silentAuth);
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? "GET";
+  const headers = authHeaders();
+  if (options.body !== undefined && !options.formData) {
     headers["Content-Type"] = "application/json";
   }
   if (method !== "GET") {
@@ -133,7 +168,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     response = await fetch(`${BASE_URL}${path}`, {
       method,
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.formData ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
       credentials: "same-origin",
       cache: "no-store",
       signal: options.signal,
@@ -143,6 +178,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       throw error;
     }
     throw new NetworkError();
+  }
+
+  if (options.raw) {
+    if (!response.ok) {
+      throw await parseError(response, options.silentAuth);
+    }
+    return (await response.blob()) as unknown as T;
   }
 
   if (response.status === 204) {
@@ -160,17 +202,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (!response.ok) {
-    const body = (data ?? {}) as ApiErrorBody;
-    const status = response.status;
-    if (status === 401 && !options.silentAuth && typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("nn:unauthorized"));
-    }
-    throw new ApiError(
-      status,
-      body.error?.code ?? `http_${status}`,
-      body.error?.message ?? "درخواست انجام نشد. لطفا دوباره تلاش کنید.",
-      body.error?.details,
-    );
+    throw apiError(response.status, data, options.silentAuth);
   }
 
   return data as T;
@@ -183,6 +215,12 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  /** multipart/form-data upload (file attachments). */
+  upload: <T>(path: string, formData: FormData) =>
+    request<T>(path, { method: "POST", formData }),
+  /** Authenticated binary download, used for images behind admin auth. */
+  getBlob: (path: string, signal?: AbortSignal) =>
+    request<Blob>(path, { method: "GET", raw: true, signal }),
 };
 
 export function errorMessage(error: unknown): string {

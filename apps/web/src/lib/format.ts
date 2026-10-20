@@ -85,15 +85,28 @@ export function formatAmount(amountMinor: number, currency: Currency): string {
   return `${formatter.format(value)} ${CURRENCY_LABELS[currency] ?? currency}`;
 }
 
+/**
+ * «۱۲ دقیقه پیش» for a duration that is already known.
+ *
+ * Kept free of `Date.now()` so components can format an age during render
+ * without reading the clock (React purity rules); callers that have a
+ * timestamp use :func:`formatRelative` instead.
+ */
+export function formatAge(seconds: number): string {
+  const diff = Math.max(0, Math.round(seconds));
+  if (diff < 45) return "لحظه ای پیش";
+  if (diff < 3600) return `${formatNumber(Math.round(diff / 60))} دقیقه پیش`;
+  if (diff < 86400) return `${formatNumber(Math.round(diff / 3600))} ساعت پیش`;
+  if (diff < 86400 * 30) return `${formatNumber(Math.round(diff / 86400))} روز پیش`;
+  return `${formatNumber(Math.round(diff / (86400 * 30)))} ماه پیش`;
+}
+
 export function formatRelative(iso?: string | null, now = Date.now()): string {
   if (!iso) return "—";
   const date = new Date(iso).getTime();
   if (Number.isNaN(date)) return "—";
   const diff = Math.round((now - date) / 1000);
-  if (diff < 45) return "لحظه ای پیش";
-  if (diff < 3600) return `${formatNumber(Math.round(diff / 60))} دقیقه پیش`;
-  if (diff < 86400) return `${formatNumber(Math.round(diff / 3600))} ساعت پیش`;
-  if (diff < 86400 * 7) return `${formatNumber(Math.round(diff / 86400))} روز پیش`;
+  if (diff < 86400 * 7) return formatAge(diff);
   return formatDate(iso);
 }
 

@@ -73,6 +73,7 @@ def telegram_update(
     telegram_id: int,
     text: str | None = None,
     callback_data: str | None = None,
+    photo: bool = False,
 ) -> int:
     update_id = next(_update_ids) + int(time.time()) * 1000
     sender = {
@@ -97,6 +98,20 @@ def telegram_update(
                 "data": callback_data,
             },
         }
+    elif photo:
+        message = {
+            "message_id": 1,
+            "from": sender,
+            "chat": {"id": telegram_id, "type": "private"},
+            "date": int(time.time()),
+            "photo": [
+                {"file_id": "mock-photo-small", "file_unique_id": "u-small", "file_size": 500},
+                {"file_id": "mock-photo-large", "file_unique_id": "u-large", "file_size": 4000},
+            ],
+        }
+        if text:
+            message["caption"] = text
+        payload = {"update_id": update_id, "message": message}
     else:
         payload = {
             "update_id": update_id,

@@ -119,6 +119,9 @@ browser only talks to the web origin. The admin account is created on first API 
 from `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` (only when no admin exists).
 
 Windows users: see [docs/local-setup-windows.md](docs/local-setup-windows.md).
+Hosts that cannot run a second process (Render free) can set `EMBEDDED_WORKER=true` and
+use the scheduled GitHub Actions worker instead of terminal 2; see
+[docs/deployment.md](docs/deployment.md) §3.5.
 
 ### Demo data (development only)
 
@@ -130,6 +133,32 @@ TELEGRAM_ADAPTER=mock python -m scripts.seed_demo
 The seed is idempotent for its own demo rows, refuses to run against a real bot, and
 prints license codes exactly once. Demo projects are flagged `is_demo` and labelled
 «نمایشی» in the UI; they are never mixed with operational reporting.
+
+#### Removing demo data
+
+```bash
+cd apps/api
+python -m scripts.purge_demo --yes
+```
+
+The script deletes only projects with `is_demo = true` (members, licenses, payments,
+notifications, tickets and jobs cascade with them) and writes one `project.deleted`
+audit row per project plus a `project.demo_purged` summary. Without `--yes` it exits
+with status 2 and deletes nothing.
+
+Observed run (2026-10-20, local development database, two seeded projects):
+
+```text
+$ python -m scripts.purge_demo --yes
+Deleted 2 demo project(s).
+  - کمپین دیجیتال بهار (f6a62101-8675-49e3-955e-afda640a0607)
+  - فروشگاه آنلاین آرمان (f9e9f046-9e66-473d-87c0-7bf454fe8d95)
+```
+
+After the run the database had 0 projects, 0 members, 0 licenses, 0 payments,
+0 notifications and 0 tickets; the audit log kept the three rows above
+(two `project.deleted` and one `project.demo_purged` with `count: 2`). Re-running
+`python -m scripts.seed_demo` recreates the demo set with fresh license codes.
 
 ## Configuration
 
@@ -146,6 +175,7 @@ worker read the same `.env` at the repository root. Key values:
 | `TELEGRAM_WEBHOOK_SECRET` | Validated against `X-Telegram-Bot-Api-Secret-Token` |
 | `BOOTSTRAP_ADMIN_*` | One-time creation of the first admin |
 | `WORKER_*`, `JOB_*` | Polling interval, batch size, stale-claim window, retry policy |
+| `EMBEDDED_WORKER` | Drain the queue inside the API process (needed on hosts without a worker plan, e.g. Render free) |
 | `PAYMENT_REMINDER_DAYS_BEFORE` | Reminder lead time (default 3 days) |
 
 Never commit a real `.env`, bot token, session cookie or license code.

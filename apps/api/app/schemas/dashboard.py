@@ -54,3 +54,8 @@ class SystemStatusOut(BaseModel):
     site_url: str
     pending_jobs: int
     failed_jobs: int
+    #: True when the API drains the queue itself (Render free has no worker plan).
+    embedded_worker: bool
+    oldest_pending_seconds: int | None
+    #: idle (empty queue) | draining (worker online) | stalled (waiting, no worker)
+    queue_status: str

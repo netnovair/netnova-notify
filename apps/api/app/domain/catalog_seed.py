@@ -40,6 +40,26 @@ def q(
     }
 
 
+def group(
+    key: str,
+    title: str,
+    children: list[dict[str, Any]],
+    *,
+    description: str = "",
+    show_portfolio: bool = False,
+) -> dict[str, Any]:
+    """A node that only groups other nodes; children carry the questions."""
+    return {
+        "key": key,
+        "title": title,
+        "description": description,
+        "questions": [],
+        "show_portfolio": show_portfolio,
+        "portfolio_text": PORTFOLIO_HINT if show_portfolio else "",
+        "items": children,
+    }
+
+
 def item(
     key: str,
     title: str,
@@ -57,6 +77,13 @@ def item(
         "portfolio_text": PORTFOLIO_HINT if show_portfolio else "",
     }
 
+
+SEO_QUESTIONS = [
+    q("site", "آدرس سایت"),
+    q("keywords", "کلیدواژه های اصلی", "long_text"),
+    q("competitors", "سایت رقبا (اختیاری)", required=False),
+    q("details", "هدف شما از سئو چیست؟", "long_text", required=False),
+]
 
 WEB_QUESTIONS = [
     q(
@@ -317,36 +344,77 @@ DEFAULT_CATALOG: list[dict[str, Any]] = [
         "show_portfolio": True,
         "portfolio_text": PORTFOLIO_HINT,
         "items": [
-            item(
-                "android", "اپلیکیشن اندروید", APP_QUESTIONS, description="اپلیکیشن نیتیو اندروید."
+            group(
+                "android",
+                "اپلیکیشن اندروید",
+                [
+                    item(
+                        "shop",
+                        "فروشگاهی",
+                        APP_QUESTIONS,
+                        description="فروش محصولات فیزیکی و مجازی مثل دوره و فایل.",
+                        show_portfolio=True,
+                    ),
+                    item(
+                        "service",
+                        "خدماتی",
+                        APP_QUESTIONS,
+                        description="ارائه خدمات و دریافت درخواست.",
+                    ),
+                    item("edu", "آموزشی", APP_QUESTIONS, description="ارائه دوره و محتوای آموزشی."),
+                    item(
+                        "booking", "نوبت دهی", APP_QUESTIONS, description="رزرو و نوبت دهی آنلاین."
+                    ),
+                ],
+                description="اپلیکیشن نیتیو اندروید.",
             ),
-            item(
+            group(
                 "pwa",
                 "نسخه تحت وب (مناسب iOS)",
-                APP_QUESTIONS,
+                [
+                    item(
+                        "shop",
+                        "فروشگاهی",
+                        APP_QUESTIONS,
+                        description="فروشگاه نصب شدنی روی آیفون و اندروید.",
+                    ),
+                    item(
+                        "service",
+                        "خدماتی",
+                        APP_QUESTIONS,
+                        description="ارائه خدمات و دریافت درخواست.",
+                    ),
+                    item("edu", "آموزشی", APP_QUESTIONS, description="دوره و محتوای آموزشی."),
+                    item(
+                        "booking", "نوبت دهی", APP_QUESTIONS, description="رزرو و نوبت دهی آنلاین."
+                    ),
+                ],
                 description="اپلیکیشن تحت وب که روی آیفون هم نصب می شود.",
             ),
-            item(
+            group(
                 "both",
                 "اندروید و تحت وب (هر دو)",
-                APP_QUESTIONS,
-                description="یک محصول با دو نسخه.",
-            ),
-            item(
-                "shop",
-                "اپلیکیشن فروشگاهی",
-                APP_QUESTIONS,
-                description="فروش محصولات فیزیکی و مجازی مثل دوره و فایل.",
-                show_portfolio=True,
-            ),
-            item(
-                "edu",
-                "اپلیکیشن آموزشی",
-                APP_QUESTIONS,
-                description="ارائه دوره و محتوای آموزشی به کاربران.",
-            ),
-            item(
-                "booking", "اپلیکیشن نوبت دهی", APP_QUESTIONS, description="رزرو و نوبت دهی آنلاین."
+                [
+                    item(
+                        "shop",
+                        "فروشگاهی",
+                        APP_QUESTIONS,
+                        description="یک محصول با دو نسخه، مناسب فروش.",
+                    ),
+                    item(
+                        "service",
+                        "خدماتی",
+                        APP_QUESTIONS,
+                        description="یک محصول با دو نسخه، مناسب خدمات.",
+                    ),
+                    item(
+                        "booking",
+                        "نوبت دهی",
+                        APP_QUESTIONS,
+                        description="رزرو و نوبت دهی در دو نسخه.",
+                    ),
+                ],
+                description="یک محصول با دو نسخه اندروید و وب.",
             ),
         ],
     },
@@ -388,36 +456,60 @@ DEFAULT_CATALOG: list[dict[str, Any]] = [
         "show_portfolio": True,
         "portfolio_text": PORTFOLIO_HINT,
         "items": [
-            item(
+            group(
                 "seo-basic",
                 "سئو پایه (گرید ۱)",
                 [
-                    q("site", "آدرس سایت"),
-                    q("keywords", "کلیدواژه های اصلی", "long_text"),
-                    q("competitors", "سایت رقبا (اختیاری)", required=False),
-                    q("details", "هدف شما از سئو چیست؟", "long_text", required=False),
+                    item(
+                        "onpage",
+                        "سئوی داخلی صفحات",
+                        SEO_QUESTIONS,
+                        description="عنوان، توضیحات و ساختار صفحات.",
+                    ),
+                    item(
+                        "technical",
+                        "سئوی فنی",
+                        SEO_QUESTIONS,
+                        description="سرعت، ایندکس و رفع خطاهای فنی.",
+                    ),
                 ],
                 description="بهینه سازی فنی پایه و سئوی داخلی صفحات.",
             ),
-            item(
+            group(
                 "seo-pro",
                 "سئو حرفه ای (گرید ۲)",
                 [
-                    q("site", "آدرس سایت"),
-                    q("keywords", "کلیدواژه های اصلی", "long_text"),
-                    q("competitors", "سایت رقبا (اختیاری)", required=False),
-                    q("details", "هدف شما از سئو چیست؟", "long_text", required=False),
+                    item(
+                        "content",
+                        "تولید محتوای سئو شده",
+                        SEO_QUESTIONS,
+                        description="محتوای هدفمند برای کلیدواژه ها.",
+                    ),
+                    item(
+                        "report",
+                        "گزارش ماهانه و تحلیل",
+                        SEO_QUESTIONS,
+                        description="تحلیل رتبه و رفتار کاربران.",
+                    ),
                 ],
                 description="سئوی فنی و محتوایی همراه با گزارش ماهانه.",
             ),
-            item(
+            group(
                 "seo-enterprise",
                 "سئو سازمانی (گرید ۳)",
                 [
-                    q("site", "آدرس سایت"),
-                    q("keywords", "کلیدواژه های اصلی", "long_text"),
-                    q("competitors", "سایت رقبا (اختیاری)", required=False),
-                    q("details", "هدف شما از سئو چیست؟", "long_text", required=False),
+                    item(
+                        "strategy",
+                        "استراتژی محتوا و کلیدواژه",
+                        SEO_QUESTIONS,
+                        description="نقشه راه محتوایی بلندمدت.",
+                    ),
+                    item(
+                        "authority",
+                        "لینک سازی و اعتبار دامنه",
+                        SEO_QUESTIONS,
+                        description="افزایش اعتبار دامنه.",
+                    ),
                 ],
                 description="برنامه سئوی بلندمدت برای سایت های بزرگ.",
             ),

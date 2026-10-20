@@ -9,6 +9,13 @@ from app.domain.enums import TicketPriority, TicketStatus
 from app.schemas.common import ORMModel
 
 
+class TicketAttachmentOut(ORMModel):
+    id: uuid.UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+
+
 class TicketMessageOut(ORMModel):
     id: uuid.UUID
     author_type: str
@@ -16,6 +23,7 @@ class TicketMessageOut(ORMModel):
     body: str
     channel: str
     created_at: datetime
+    attachments: list[TicketAttachmentOut] = []
 
 
 class TicketListItem(BaseModel):

@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import math
 import uuid
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import AdminContext, get_admin_context
+from app.core.errors import bad_request, not_found
 from app.core.security import utcnow
 from app.db.session import get_db
+from app.domain.attachments import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    AttachmentInput,
+)
 from app.domain.enums import TicketStatus
+from app.models.ticket import TicketAttachment
 from app.schemas.common import Page
 from app.schemas.ticket import (
     TicketCreate,
@@ -48,6 +57,72 @@ def list_tickets(
         page_size=page_size,
         pages=math.ceil(total / page_size) if total else 0,
     )
+
+
+@router.get("/attachments/{attachment_id}")
+def download_ticket_attachment(
+    attachment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: AdminContext = Depends(get_admin_context),
+) -> Response:
+    """Serve one stored image to an authenticated admin.
+
+    The bytes are always returned with ``nosniff`` and a private cache policy;
+    the filename is RFC 5987 encoded so Persian names survive the header.
+    """
+    attachment = db.get(TicketAttachment, attachment_id)
+    if attachment is None:
+        raise not_found("تصویر پیوست یافت نشد.")
+    return Response(
+        content=attachment.data,
+        media_type=attachment.content_type,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(attachment.filename)}",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/{ticket_id}/attachments", response_model=TicketDetail)
+async def reply_ticket_with_images(
+    ticket_id: uuid.UUID,
+    body: str = Form(default=""),
+    files: list[UploadFile] | None = File(default=None),
+    db: Session = Depends(get_db),
+    ctx: AdminContext = Depends(get_admin_context),
+) -> TicketDetail:
+    """Reply to a ticket with up to four images (multipart/form-data)."""
+    uploads = files or []
+    if not uploads:
+        raise bad_request("حداقل یک تصویر انتخاب کنید.", code="no_attachment")
+    if len(uploads) > MAX_ATTACHMENTS_PER_MESSAGE:
+        raise bad_request(
+            f"حداکثر {MAX_ATTACHMENTS_PER_MESSAGE} تصویر در هر پیام ارسال کنید.",
+            code="too_many_attachments",
+        )
+    ticket = TicketService.get(db, ticket_id)
+    drafts = [
+        AttachmentInput(
+            data=await upload.read(MAX_ATTACHMENT_BYTES + 1),
+            filename=upload.filename or "image",
+            content_type=upload.content_type,
+        )
+        for upload in uploads
+    ]
+    TicketService.reply(
+        db,
+        ticket=ticket,
+        body=body,
+        author_type="admin",
+        admin_id=ctx.admin.id,
+        actor=ctx.actor,
+        channel="web",
+        attachments=drafts,
+    )
+    db.commit()
+    full = TicketService.get(db, ticket.id)
+    return ticket_detail(full, utcnow())
 
 
 @router.get("/{ticket_id}", response_model=TicketDetail)

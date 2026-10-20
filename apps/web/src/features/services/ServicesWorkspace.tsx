@@ -47,6 +47,8 @@ type QuestionDraft = {
 type ItemDraft = {
   id: string | null;
   categoryId: string;
+  parentId: string | null;
+  parentTitle: string | null;
   title: string;
   description: string;
   order_index: string;
@@ -473,8 +475,14 @@ function ItemModal({
     <Modal
       open
       onClose={onClose}
-      title={draft.id ? "ویرایش زیرخدمت" : "زیرخدمت جدید"}
-      description="سوال ها به ترتیب همین فهرست در ربات پرسیده می شوند."
+      title={
+        draft.id ? "ویرایش خدمت" : draft.parentId ? "زیرمجموعه جدید" : "زیرخدمت جدید"
+      }
+      description={
+        draft.parentTitle
+          ? `این مورد زیر «${draft.parentTitle}» قرار می گیرد. سوال ها به ترتیب همین فهرست در ربات پرسیده می شوند.`
+          : "سوال ها به ترتیب همین فهرست در ربات پرسیده می شوند."
+      }
       size="lg"
       footer={
         <>
@@ -491,7 +499,7 @@ function ItemModal({
         {error ? <InlineAlert tone="danger">{error}</InlineAlert> : null}
         <div>
           <label htmlFor="item-title" className="field-label">
-            عنوان زیرخدمت
+            {draft.parentId ? "عنوان زیرمجموعه" : "عنوان زیرخدمت"}
           </label>
           <input
             id="item-title"
@@ -617,6 +625,95 @@ function ItemModal({
   );
 }
 
+const MAX_ITEM_DEPTH = 4;
+
+function ServiceItemBranch({
+  item,
+  busy,
+  onEdit,
+  onAddChild,
+  onRemove,
+}: {
+  item: ServiceItem;
+  busy: boolean;
+  onEdit: (item: ServiceItem) => void;
+  onAddChild: (item: ServiceItem) => void;
+  onRemove: (item: ServiceItem) => void;
+}) {
+  return (
+    <li className="py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium">{item.title}</span>
+            {item.is_active ? (
+              <Badge tone="success">فعال</Badge>
+            ) : (
+              <Badge tone="neutral">غیرفعال</Badge>
+            )}
+            {item.is_group ? (
+              <Badge tone="info">{item.children.length} زیرمجموعه</Badge>
+            ) : (
+              <Badge tone="neutral">{item.questions.length} سوال</Badge>
+            )}
+            {item.show_portfolio ? <Badge tone="info">نمونه کار</Badge> : null}
+          </div>
+          <p className="mt-0.5 text-[10px] text-muted">{item.description || "بدون توضیح"}</p>
+          {item.is_group ? (
+            <p className="mt-1 text-[10px] leading-5 text-muted">
+              این مورد زیرمجموعه دارد؛ در ربات به جای سوال های این سطح، فهرست زیرمجموعه ها
+              نمایش داده می شود.
+            </p>
+          ) : null}
+        </div>
+        <div className="ms-auto flex items-center gap-1">
+          {item.level < MAX_ITEM_DEPTH ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onAddChild(item)}
+              aria-label={`افزودن زیرمجموعه به ${item.title}`}
+            >
+              <Plus size={13} aria-hidden /> زیرمجموعه
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onEdit(item)}
+            aria-label={`ویرایش ${item.title}`}
+          >
+            <Pencil size={13} aria-hidden />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onRemove(item)}
+            disabled={busy}
+            aria-label={`حذف ${item.title}`}
+          >
+            <Trash2 size={13} aria-hidden />
+          </Button>
+        </div>
+      </div>
+      {item.children.length > 0 ? (
+        <ul className="mt-1 ms-2 divide-y divide-line-soft border-s border-line-soft ps-3">
+          {item.children.map((child) => (
+            <ServiceItemBranch
+              key={child.id}
+              item={child}
+              busy={busy}
+              onEdit={onEdit}
+              onAddChild={onAddChild}
+              onRemove={onRemove}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
 export function ServicesWorkspace() {
   const { notify } = useToast();
   const catalog = useApiData<ServiceCatalog>(
@@ -657,7 +754,8 @@ export function ServicesWorkspace() {
       if (draft.id) {
         await api.patch(`/catalog/items/${draft.id}`, payload);
       } else {
-        await api.post(`/catalog/categories/${draft.categoryId}/items`, payload);
+        const query = draft.parentId ? `?parent_id=${draft.parentId}` : "";
+        await api.post(`/catalog/categories/${draft.categoryId}/items${query}`, payload);
       }
       notify("زیرخدمت ذخیره شد.", "success");
       setItemDraft(null);
@@ -667,6 +765,49 @@ export function ServicesWorkspace() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function editItem(categoryId: string, item: ServiceItem) {
+    setItemDraft({
+      id: item.id,
+      categoryId,
+      parentId: item.parent_id,
+      parentTitle: null,
+      title: item.title,
+      description: item.description,
+      order_index: String(item.order_index),
+      is_active: item.is_active,
+      show_portfolio: item.show_portfolio,
+      portfolio_text: item.portfolio_text,
+      portfolio_url: item.portfolio_url,
+      questions: item.questions.map((question) => ({
+        key: question.key,
+        label: question.label,
+        help_text: question.help_text,
+        field_type: question.field_type,
+        required: question.required,
+        options: question.options.join("، "),
+        min_value: question.min_value === null ? "" : String(question.min_value),
+        max_value: question.max_value === null ? "" : String(question.max_value),
+      })),
+    });
+  }
+
+  function addChild(categoryId: string, parent: ServiceItem) {
+    setItemDraft({
+      id: null,
+      categoryId,
+      parentId: parent.id,
+      parentTitle: parent.title,
+      title: "",
+      description: "",
+      order_index: String(parent.children.length),
+      is_active: true,
+      show_portfolio: false,
+      portfolio_text: "",
+      portfolio_url: "",
+      questions: [{ ...EMPTY_QUESTION }],
+    });
   }
 
   async function removeCategory(category: ServiceCategory) {
@@ -791,6 +932,8 @@ export function ServicesWorkspace() {
                       setItemDraft({
                         id: null,
                         categoryId: category.id,
+                        parentId: null,
+                        parentTitle: null,
                         title: "",
                         description: "",
                         order_index: String(category.items.length),
@@ -844,75 +987,14 @@ export function ServicesWorkspace() {
                   </li>
                 ) : (
                   category.items.map((item) => (
-                    <li
+                    <ServiceItemBranch
                       key={item.id}
-                      className="flex flex-wrap items-center gap-2 py-2.5"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-xs font-medium">{item.title}</span>
-                          {item.is_active ? (
-                            <Badge tone="success">فعال</Badge>
-                          ) : (
-                            <Badge tone="neutral">غیرفعال</Badge>
-                          )}
-                          <Badge tone="neutral">{item.questions.length} سوال</Badge>
-                          {item.show_portfolio ? (
-                            <Badge tone="info">نمونه کار</Badge>
-                          ) : null}
-                        </div>
-                        <p className="mt-0.5 text-[10px] text-muted">
-                          {item.description || "بدون توضیح"}
-                        </p>
-                      </div>
-                      <div className="ms-auto flex items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() =>
-                            setItemDraft({
-                              id: item.id,
-                              categoryId: category.id,
-                              title: item.title,
-                              description: item.description,
-                              order_index: String(item.order_index),
-                              is_active: item.is_active,
-                              show_portfolio: item.show_portfolio,
-                              portfolio_text: item.portfolio_text,
-                              portfolio_url: item.portfolio_url,
-                              questions: item.questions.map((question) => ({
-                                key: question.key,
-                                label: question.label,
-                                help_text: question.help_text,
-                                field_type: question.field_type,
-                                required: question.required,
-                                options: question.options.join("، "),
-                                min_value:
-                                  question.min_value === null
-                                    ? ""
-                                    : String(question.min_value),
-                                max_value:
-                                  question.max_value === null
-                                    ? ""
-                                    : String(question.max_value),
-                              })),
-                            })
-                          }
-                          aria-label={`ویرایش ${item.title}`}
-                        >
-                          <Pencil size={13} aria-hidden />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void removeItem(item)}
-                          disabled={busy}
-                          aria-label={`حذف ${item.title}`}
-                        >
-                          <Trash2 size={13} aria-hidden />
-                        </Button>
-                      </div>
-                    </li>
+                      item={item}
+                      busy={busy}
+                      onEdit={(item) => editItem(category.id, item)}
+                      onAddChild={(item) => addChild(category.id, item)}
+                      onRemove={removeItem}
+                    />
                   ))
                 )}
               </ul>
