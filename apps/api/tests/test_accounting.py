@@ -534,3 +534,31 @@ def test_allocated_invoice_cannot_be_cancelled(admin_client: TestClient) -> None
 
     totals = admin_client.get(f"/api/v1/accounting/projects/{project['id']}/totals").json()
     assert totals["totals"][0]["debt_minor"] == 0
+
+
+def test_approval_notice_tells_the_employer_the_project_is_settled(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    project = _employer(admin_client, 860015, name="پروژه تسویه کامل")
+    _invoice(admin_client, project["id"], amount_minor=2_000_000)
+
+    telegram_update(admin_client, telegram_id=860015, callback_data="0:rnew")
+    telegram_update(admin_client, telegram_id=860015, text="2000000")
+    telegram_update(admin_client, telegram_id=860015, text="/skip")
+    telegram_update(admin_client, telegram_id=860015, text="واریز کامل فاکتور")
+
+    with SessionLocal() as db:
+        receipt_id = str(db.query(PaymentReceipt).one().id)
+
+    approved = admin_client.post(f"/api/v1/accounting/receipts/{receipt_id}/approve")
+    assert approved.status_code == 200, approved.text
+
+    totals = _totals(admin_client, project["id"])
+    assert totals["debt_minor"] == 0
+    assert totals["balance_minor"] == 0
+    assert totals["settled"] is True
+
+    run_worker(mock_adapter)
+    notice = [message for message in mock_adapter.sent if "تایید شد" in message["text"]][-1]
+    assert "تسویه" in notice["text"]
+    assert "بدهی" not in notice["text"]

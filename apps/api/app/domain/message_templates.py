@@ -56,6 +56,7 @@ RECEIPT_APPROVED = TemplateDefinition(
     body=(
         "پرداخت شما برای پروژه <b>{project}</b> تایید شد.\n"
         "مبلغ: {amount}\n"
+        "وضعیت: <b>{status}</b>\n"
         "مانده حساب: <b>{remaining}</b>"
     ),
     variables=("project", "amount", "remaining", "status"),
