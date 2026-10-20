@@ -1,0 +1,51 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+apps/web/coverage/
+npm-debug.log*
+yarn-error.log*
+
+# Local infrastructure / data
+pgdata/
+*.sqlite
+*.sqlite3
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+playwright-report/
+test-results/
+
+# Local backups and runtime artifacts
+backups/
+*.dump
+*.log

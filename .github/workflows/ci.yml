@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend (lint + migrations + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: netnova
+          POSTGRES_PASSWORD: netnova
+          POSTGRES_DB: netnova_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netnova -d netnova_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 8
+
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+psycopg://netnova:netnova@localhost:5432/netnova_test
+      SECRET_KEY: ci-only-secret-key-0123456789abcdef0123456789
+      TELEGRAM_ADAPTER: mock
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_WEBHOOK_SECRET: ci-only-webhook-secret
+      BOOTSTRAP_ADMIN_EMAIL: admin@netnova.ir
+      BOOTSTRAP_ADMIN_PASSWORD: Ci-Admin-Pass-123
+      BOOTSTRAP_ADMIN_NAME: مدیر CI
+      COOKIE_SECURE: "false"
+      LOG_LEVEL: WARNING
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r apps/api/requirements-dev.txt
+
+      - name: Ruff lint
+        working-directory: apps/api
+        run: ruff check app tests scripts
+
+      - name: Ruff format check
+        working-directory: apps/api
+        run: ruff format --check app tests scripts
+
+      - name: Apply migrations to an empty database
+        working-directory: apps/api
+        run: alembic upgrade head
+
+      - name: Check migration drift
+        working-directory: apps/api
+        run: alembic check
+
+      - name: Run tests
+        working-directory: apps/api
+        run: pytest -q --cov=app --cov-report=term-missing
+
+  frontend:
+    name: Frontend (lint + types + tests + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          API_INTERNAL_URL: http://127.0.0.1:8000
+
+  containers:
+    name: Container builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [backend, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -f infra/api.Dockerfile -t netnova-notify-api:ci .
+
+      - name: Build web image
+        run: docker build -f infra/web.Dockerfile -t netnova-notify-web:ci .
