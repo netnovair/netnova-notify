@@ -1,0 +1,130 @@
+# Single-host deployment for NetNova Notify.
+#
+#   cp .env.example .env    # edit values, set POSTGRES_PASSWORD and DOMAIN
+#   docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+#
+# The default stack (db, api, worker, web) exposes the panel on port 3000.
+# Add the `production` profile to terminate TLS with Caddy on ports 80/443:
+#   docker compose --env-file .env -f infra/docker-compose.yml --profile production up -d --build
+#
+# Never commit the real .env or any secret used here.
+
+name: netnova-notify
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-netnova}
+      POSTGRES_USER: ${POSTGRES_USER:-netnova}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-netnova} -d ${POSTGRES_DB:-netnova}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - internal
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      ENVIRONMENT: production
+      COOKIE_SECURE: "true"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-netnova}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-netnova}
+      CORS_ORIGINS: ${SITE_ORIGIN:-https://notify.example.com}
+      NEXT_PUBLIC_SITE_URL: ${SITE_ORIGIN:-https://notify.example.com}
+      API_INTERNAL_URL: http://api:8000
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks:
+      - internal
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-netnova}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-netnova}
+      API_INTERNAL_URL: http://api:8000
+    command: ["python", "-m", "app.worker.main"]
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/web.Dockerfile
+      args:
+        API_INTERNAL_URL: http://api:8000
+        NEXT_PUBLIC_SITE_URL: ${SITE_ORIGIN:-http://localhost:3000}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      API_INTERNAL_URL: http://api:8000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
+  proxy:
+    image: caddy:2-alpine
+    profiles: ["production"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN, e.g. notify.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - web
+      - api
+    networks:
+      - internal
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

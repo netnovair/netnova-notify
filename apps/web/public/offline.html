@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#070c18" />
+    <title>اتصال قطع است | NetNova Notify</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background:
+          radial-gradient(900px 500px at 100% -10%, rgba(124, 92, 255, 0.12), transparent 60%),
+          #070c18;
+        color: #e9edf9;
+        font-family: "Vazirmatn", Tahoma, sans-serif;
+        line-height: 1.9;
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        border: 1px solid #223056;
+        border-radius: 20px;
+        background: #0e162b;
+        padding: 28px;
+        text-align: center;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      }
+      .mark {
+        width: 54px;
+        height: 54px;
+        margin: 0 auto 16px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        background: rgba(124, 92, 255, 0.15);
+        border: 1px solid rgba(124, 92, 255, 0.35);
+        color: #bfaeff;
+        font-size: 26px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 10px;
+        font-size: 13px;
+        color: #93a0c2;
+      }
+      .note {
+        margin-top: 18px;
+        border-radius: 12px;
+        border: 1px solid #223056;
+        background: #141f3a;
+        padding: 10px 12px;
+        font-size: 11px;
+        color: #93a0c2;
+      }
+      button {
+        margin-top: 20px;
+        width: 100%;
+        border: 0;
+        border-radius: 12px;
+        padding: 12px;
+        font: inherit;
+        font-size: 13px;
+        color: #fff;
+        background: #7c5cff;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #6a49f0;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="mark" aria-hidden="true">⚡</div>
+      <h1>اتصال اینترنت برقرار نیست</h1>
+      <p>برای مشاهده داده های پروژه ها و انجام عملیات، اتصال به سرور لازم است.</p>
+      <p>هیچ عملیاتی در حالت آفلاین انجام یا ثبت نمی شود.</p>
+      <div class="note">
+        داده های خصوصی، اطلاعیه ها و اطلاعات مالی در حافظه آفلاین نگهداری نمی شوند.
+      </div>
+      <button type="button" onclick="window.location.reload()">تلاش دوباره</button>
+    </main>
+  </body>
+</html>

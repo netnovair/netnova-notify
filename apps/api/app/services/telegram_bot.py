@@ -1,0 +1,738 @@
+"""Telegram update handling for the central employer bot.
+
+Security rules implemented here:
+* only private chats are processed;
+* callback data never contains database ids, license codes or financial data,
+  only short action codes that are re-validated against fresh database access;
+* every menu action re-checks project status, license validity and membership;
+* feature capabilities come from the registry, so unimplemented features answer
+  with an explicit "coming soon" message and never fabricated data.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timedelta
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.adapters.telegram.base import TelegramAdapter, TelegramError
+from app.adapters.telegram.formatting import html_escape, inline_keyboard, truncate
+from app.core.config import Settings
+from app.core.errors import ApiError
+from app.core.rate_limit import rate_limiter
+from app.core.security import normalize_license_code, utcnow
+from app.domain.features import enabled_features
+from app.domain.jalali import format_jalali_date
+from app.domain.menu import (
+    project_menu_buttons,
+    project_picker_buttons,
+    soon_key_for_callback,
+)
+from app.domain.payments import format_amount, is_overdue
+from app.features import FeatureContext, find_by_action, get_feature, handler_for
+from app.models.payment import Payment
+from app.models.system import SystemState
+from app.models.telegram import ProjectMember, TelegramUser
+from app.repositories.licenses import MemberRepository
+from app.repositories.notifications import NotificationRepository
+from app.repositories.payments import PaymentRepository
+from app.repositories.users import TelegramUserRepository
+from app.services.licenses import LicenseService
+from app.services.tickets import TicketService, actor_for_employer
+
+logger = logging.getLogger(__name__)
+
+WELCOME = (
+    "به ربات اطلاع رسانی <b>نت نووا</b> خوش آمدید.\n\n"
+    "این ربات برای ارسال اطلاعیه ها و وضعیت مالی پروژه های شماست.\n"
+    "برای اتصال، کد لایسنس پروژه را که مدیر در اختیار شما قرار داده ارسال کنید.\n"
+    "نمونه کد: <code>NN-XXXX-XXXX-XXXX-XXXX</code>"
+)
+
+HELP = (
+    "<b>راهنما</b>\n\n"
+    "دستورها:\n"
+    "/start شروع و نمایش منو\n"
+    "/menu نمایش منوی پروژه\n"
+    "/help همین راهنما\n\n"
+    "برای اتصال پروژه، کد لایسنس را به صورت یک پیام ارسال کنید.\n"
+    "برای دیدن اطلاعیه ها و وضعیت مالی از دکمه های منو استفاده کنید."
+)
+
+SOON_TEMPLATE = "قابلیت «{label}» به زودی فعال می شود."
+
+CONVERSATION_TTL_MINUTES = 30
+
+
+class TelegramBotService:
+    def __init__(self, db: Session, adapter: TelegramAdapter, settings: Settings) -> None:
+        self.db = db
+        self.adapter = adapter
+        self.settings = settings
+
+    # ------------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------------
+    def handle_update(self, update: dict) -> None:
+        self._record_update(update)
+        if update.get("callback_query"):
+            self._handle_callback(update["callback_query"])
+            return
+        message = update.get("message")
+        if not message:
+            return
+        chat = message.get("chat") or {}
+        if chat.get("type") != "private":
+            return
+        sender = message.get("from") or {}
+        if not sender.get("id") or sender.get("is_bot"):
+            return
+        chat_id = int(chat["id"])
+        user = self._upsert_user(sender)
+        text = (message.get("text") or "").strip()
+        if not text:
+            return
+
+        if text.startswith("/start"):
+            self._send_home(user, chat_id)
+            return
+        if text.startswith("/menu"):
+            self._send_home(user, chat_id)
+            return
+        if text.startswith("/help"):
+            self._safe_send(chat_id, HELP, inline_keyboard([[("نمایش منو", "h")]]))
+            return
+        if text.startswith("/"):
+            self._safe_send(chat_id, "دستور شناخته نشد.\n\n" + HELP)
+            return
+
+        if self._handle_conversation(user, chat_id, text):
+            return
+        if self._looks_like_license(text):
+            self._handle_license_submission(user, chat_id, text)
+            return
+        self._safe_send(
+            chat_id,
+            "برای اتصال پروژه، کد لایسنس را ارسال کنید.\nبرای مشاهده منو از /start استفاده کنید.",
+        )
+
+    # ------------------------------------------------------------------
+    # Messages / activation
+    # ------------------------------------------------------------------
+    def _handle_license_submission(self, user: TelegramUser, chat_id: int, text: str) -> None:
+        limit_key = f"activation:{user.telegram_id}"
+        if not rate_limiter.allow(limit_key, self.settings.activation_rate_limit, 60):
+            self._safe_send(
+                chat_id,
+                "تعداد تلاش های شما برای فعال سازی بیش از حد مجاز است. یک دقیقه بعد دوباره تلاش کنید.",
+            )
+            return
+        try:
+            result = LicenseService.activate(self.db, code=text, telegram_user=user)
+        except ApiError as exc:
+            self._safe_send(chat_id, html_escape(exc.message))
+            return
+        except Exception:  # noqa: BLE001 - never expose internals in chat
+            logger.exception("License activation failed")
+            self._safe_send(chat_id, "خطایی در فعال سازی رخ داد. لطفا بعدا دوباره تلاش کنید.")
+            return
+
+        if result.already_active:
+            note = "اتصال شما از قبل فعال بود."
+            self._send_home(user, chat_id, note=note)
+            return
+
+        self._safe_send(
+            chat_id,
+            f"درخواست اتصال شما به پروژه <b>{html_escape(result.project_name)}</b> ثبت شد.\n\n"
+            "پس از تایید مدیر، منوی اطلاعیه ها برای شما فعال می شود.",
+        )
+        self._notify_admin_of_request(user, result.project_name)
+
+    def _notify_admin_of_request(self, user: TelegramUser, project_name: str) -> None:
+        if not self.settings.admin_telegram_chat_id:
+            return
+        display = " ".join(part for part in (user.first_name, user.last_name) if part) or str(
+            user.telegram_id
+        )
+        text = (
+            "<b>درخواست اتصال کارفرما</b>\n"
+            f"پروژه: {html_escape(project_name)}\n"
+            f"کارفرما: {html_escape(display)}\n"
+            f"نام کاربری: @{html_escape(user.username or '-')}\n"
+            f"شناسه تلگرام: <code>{user.telegram_id}</code>\n\n"
+            "برای تایید یا رد درخواست به پنل مدیریت مراجعه کنید."
+        )
+        try:
+            self.adapter.send_message(self.settings.admin_telegram_chat_id, text)
+        except TelegramError:
+            logger.warning("Could not notify admin about a new activation request.")
+
+    @staticmethod
+    def _looks_like_license(text: str) -> bool:
+        normalized = normalize_license_code(text)
+        return normalized.startswith("NN") and len(normalized) >= 16
+
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
+    def _handle_callback(self, callback: dict) -> None:
+        callback_id = callback.get("id")
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        sender = callback.get("from") or {}
+        if not sender.get("id") or chat.get("type") != "private":
+            return
+        chat_id = int(chat["id"])
+        user = self._upsert_user(sender)
+        data = (callback.get("data") or "").strip()
+        memberships = LicenseService.access_memberships(self.db, user)
+
+        try:
+            handled = self._dispatch_callback(chat_id, user, memberships, data)
+        except Exception:  # noqa: BLE001
+            logger.exception("Telegram callback handling failed")
+            handled = False
+        if not handled:
+            self.adapter.answer_callback(callback_id, "درخواست معتبر نیست.")
+        else:
+            self.adapter.answer_callback(callback_id)
+
+    def _dispatch_callback(
+        self,
+        chat_id: int,
+        user: TelegramUser,
+        memberships: list[ProjectMember],
+        data: str,
+    ) -> bool:
+        if data == "h":
+            self._send_home(user, chat_id)
+            return True
+        if data == "help":
+            self._safe_send(chat_id, HELP, inline_keyboard([[("نمایش منو", "h")]]))
+            return True
+        if data.startswith("p:") and data[2:].isdigit():
+            index = int(data[2:])
+            if 0 <= index < len(memberships):
+                self._send_project_menu(chat_id, memberships[index], index)
+                return True
+            return False
+
+        parts = data.split(":")
+        if not parts or not parts[0].isdigit():
+            return False
+        index = int(parts[0])
+        if not (0 <= index < len(memberships)):
+            self._safe_send(chat_id, "دسترسی شما به این پروژه فعال نیست. لطفا /start را بزنید.")
+            return True
+        member = memberships[index]
+
+        if len(parts) == 2 and parts[1] == "home":
+            self._send_home(user, chat_id)
+            return True
+        if len(parts) == 2 and parts[1] == "newticket":
+            self._start_ticket_flow(user, member, chat_id)
+            return True
+        if len(parts) == 3 and parts[1] == "ticket" and parts[2].isdigit():
+            self._show_ticket(chat_id, member, index, int(parts[2]))
+            return True
+        if len(parts) == 3 and parts[1] == "treply" and parts[2].isdigit():
+            self._start_ticket_reply(user, member, chat_id, int(parts[2]))
+            return True
+        if len(parts) == 3 and parts[1] == "soon":
+            key = soon_key_for_callback(data)
+            if key is None:
+                return False
+            definition = get_feature(key)
+            if definition is None or definition.implemented:
+                return False
+            text = SOON_TEMPLATE.format(label=definition.label)
+            self._safe_send(
+                chat_id,
+                text,
+                inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
+            )
+            return True
+        if len(parts) == 2:
+            registered = find_by_action(parts[1])
+            if registered is None:
+                return False
+            handler = handler_for(registered.definition.key)
+            if handler is None:
+                # Declared but not implemented: answer explicitly, never fake data.
+                text = SOON_TEMPLATE.format(label=registered.definition.label)
+                self._safe_send(
+                    chat_id,
+                    text,
+                    inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
+                )
+                return True
+            handler(
+                FeatureContext(
+                    db=self.db,
+                    adapter=self.adapter,
+                    settings=self.settings,
+                    chat_id=chat_id,
+                    member=member,
+                    index=index,
+                    bot=self,
+                )
+            )
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Menus
+    # ------------------------------------------------------------------
+    def _send_home(self, user: TelegramUser, chat_id: int, note: str | None = None) -> None:
+        memberships = LicenseService.access_memberships(self.db, user)
+        if memberships:
+            if len(memberships) == 1:
+                self._send_project_menu(chat_id, memberships[0], 0, note=note)
+            else:
+                prefix = f"{html_escape(note)}\n\n" if note else ""
+                text = (
+                    f"{prefix}<b>پروژه های شما</b>\nبرای مشاهده منوی هر پروژه، آن را انتخاب کنید."
+                )
+                buttons = project_picker_buttons(
+                    [(member.project.name, index) for index, member in enumerate(memberships)]
+                )
+                self._safe_send(chat_id, text, buttons)
+            return
+
+        pending = [
+            member
+            for member in MemberRepository.memberships_for_user(self.db, user.id)
+            if member.status == "pending_approval"
+        ]
+        if pending:
+            names = "، ".join(html_escape(member.project.name) for member in pending)
+            self._safe_send(
+                chat_id,
+                f"درخواست اتصال شما به پروژه <b>{names}</b> ثبت شده و در انتظار تایید مدیر است.",
+            )
+            return
+
+        self._safe_send(chat_id, WELCOME, inline_keyboard([[("راهنما", "help")]]))
+
+    def _send_project_menu(
+        self,
+        chat_id: int,
+        member: ProjectMember,
+        index: int,
+        note: str | None = None,
+    ) -> None:
+        project = member.project
+        flags = {feature.key: feature.enabled for feature in project.features}
+        expiry = (
+            format_jalali_date(member.license.expires_at, self.settings.tehran_timezone)
+            if member.license and member.license.expires_at
+            else "بدون تاریخ انقضا"
+        )
+        prefix = f"{html_escape(note)}\n\n" if note else ""
+        text = (
+            f"{prefix}<b>{html_escape(project.name)}</b>\n"
+            f"<i>{html_escape(project.client_name)}</i>\n\n"
+            "وضعیت اتصال: فعال\n"
+            f"اعتبار لایسنس تا: {expiry}\n\n"
+            "برای دریافت اطلاعات، یکی از گزینه های زیر را انتخاب کنید."
+        )
+        enabled = enabled_features(flags)
+        if not enabled:
+            text += "\n\nدر حال حاضر قابلیتی برای این پروژه فعال نشده است."
+        self._safe_send(chat_id, truncate(text), project_menu_buttons(index, flags))
+
+    def send_announcements(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        self._send_announcements(chat_id, member, index)
+
+    def _send_announcements(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        notifications = NotificationRepository.recent_sent(self.db, member.project_id, limit=5)
+        if not notifications:
+            self._safe_send(
+                chat_id,
+                f"برای پروژه <b>{html_escape(member.project.name)}</b> هنوز اطلاعیه ای ارسال نشده است.",
+                inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
+            )
+            return
+        parts = [f"<b>اطلاعیه های {html_escape(member.project.name)}</b>"]
+        for notification in notifications:
+            sent_at = notification.sent_at or notification.created_at
+            parts.append(
+                f"<b>{html_escape(notification.title)}</b>\n"
+                f"<i>{format_jalali_date(sent_at, self.settings.tehran_timezone)}</i>\n"
+                f"{html_escape(notification.body)}"
+            )
+        self._safe_send(
+            chat_id,
+            truncate("\n\n".join(parts)),
+            inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
+        )
+
+    def send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        self._send_financial(chat_id, member, index)
+
+    def _send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        payments = PaymentRepository.open_payments_for_project(self.db, member.project_id)
+        back = inline_keyboard([[("بازگشت به منو", f"{index}:home")]])
+        if not payments:
+            self._safe_send(
+                chat_id,
+                f"برای پروژه <b>{html_escape(member.project.name)}</b> هیچ پرداخت بازی ثبت نشده است.",
+                back,
+            )
+            return
+        now = utcnow()
+        lines = [f"<b>وضعیت مالی {html_escape(member.project.name)}</b>", ""]
+        for payment in payments:
+            lines.append(self._format_payment(payment, now))
+        lines.append("")
+        lines.append(
+            "<i>این اطلاعات فقط جهت اطلاع رسانی است و تایید تراکنش بانکی محسوب نمی شود.</i>"
+        )
+        self._safe_send(chat_id, truncate("\n\n".join(lines)), back)
+
+    def _format_payment(self, payment: Payment, now: datetime) -> str:
+        overdue = is_overdue(payment.status, payment.due_at, now)
+        due = format_jalali_date(payment.due_at, self.settings.tehran_timezone)
+        status = "سررسید شده" if overdue else "پرداخت نشده"
+        return (
+            f"<b>{html_escape(payment.title)}</b>\n"
+            f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}\n"
+            f"سررسید: {due}\n"
+            f"وضعیت: {status}"
+        )
+
+    # ------------------------------------------------------------------
+    # Tickets (two-way support)
+    # ------------------------------------------------------------------
+    def send_tickets(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        tickets = TicketService.employer_tickets(
+            self.db, project_id=member.project_id, member_id=member.id
+        )
+        rows: list[list[tuple[str, str]]] = []
+        if tickets:
+            parts = [f"<b>تیکت های {html_escape(member.project.name)}</b>", ""]
+            for position, ticket in enumerate(tickets, start=1):
+                last = ticket.messages[-1] if ticket.messages else None
+                status = {
+                    "open": "باز",
+                    "pending_admin": "در انتظار پاسخ پشتیبانی",
+                    "pending_employer": "پاسخ داده شده",
+                    "closed": "بسته شده",
+                }.get(ticket.status, ticket.status)
+                parts.append(
+                    f"{position}. <b>{html_escape(ticket.subject)}</b>\n"
+                    f"وضعیت: {status}\n"
+                    f"آخرین پیام: {html_escape((last.body if last else '')[:120])}"
+                )
+                rows.append([(f"مشاهده تیکت {position}", f"{index}:ticket:{position - 1}")])
+            text = truncate("\n\n".join(parts))
+        else:
+            text = "هنوز تیکتی برای این پروژه ثبت نکرده اید."
+        rows.append([("ثبت تیکت جدید", f"{index}:newticket")])
+        rows.append([("بازگشت به منو", f"{index}:home")])
+        self._safe_send(chat_id, text, inline_keyboard(rows))
+
+    def _ticket_at(self, member: ProjectMember, ordinal: int):
+        """Resolve an ordinal from a callback to the employer's own ticket list.
+
+        Callback data never contains database ids. The ordinal is re-resolved for
+        this member only, so it cannot address another employer's ticket.
+        """
+        tickets = TicketService.employer_tickets(
+            self.db, project_id=member.project_id, member_id=member.id, limit=20
+        )
+        if 0 <= ordinal < len(tickets):
+            return tickets[ordinal]
+        return None
+
+    def _show_ticket(self, chat_id: int, member: ProjectMember, index: int, ordinal: int) -> None:
+        ticket = self._ticket_at(member, ordinal)
+        back = inline_keyboard([[("بازگشت به فهرست", f"{index}:tickets")]])
+        if ticket is None:
+            self._safe_send(chat_id, "این تیکت یافت نشد.", back)
+            return
+        lines = [
+            f"<b>{html_escape(ticket.subject)}</b>",
+            "",
+        ]
+        for message in ticket.messages[-6:]:
+            who = "پشتیبانی" if message.author_type == "admin" else "شما"
+            lines.append(
+                f"<b>{who}</b> - <i>{format_jalali_date(message.created_at, self.settings.tehran_timezone)}</i>\n"
+                f"{html_escape(message.body)}"
+            )
+        if ticket.status == "closed":
+            lines.append("")
+            lines.append("<i>این تیکت بسته شده است؛ ارسال پاسخ آن را دوباره باز می کند.</i>")
+        rows = [
+            [("پاسخ به این تیکت", f"{index}:treply:{ordinal}")],
+            [("بازگشت به فهرست", f"{index}:tickets")],
+        ]
+        self._safe_send(chat_id, truncate("\n\n".join(lines)), inline_keyboard(rows))
+
+    def _start_ticket_reply(
+        self, user: TelegramUser, member: ProjectMember, chat_id: int, ordinal: int
+    ) -> None:
+        ticket = self._ticket_at(member, ordinal)
+        if ticket is None:
+            self._safe_send(chat_id, "این تیکت یافت نشد.")
+            return
+        self._set_conversation(
+            user,
+            member,
+            step="ticket_reply",
+            payload={"ticket_id": str(ticket.id), "subject": ticket.subject},
+        )
+        self._safe_send(
+            chat_id,
+            f"پاسخ خود را برای تیکت «{html_escape(ticket.subject)}» بنویسید. یا /cancel را بفرستید.",
+            inline_keyboard([[("لغو", f"{self._index_of(member)}:home")]]),
+        )
+
+    def _start_ticket_flow(self, user: TelegramUser, member: ProjectMember, chat_id: int) -> None:
+        self._set_conversation(user, member, step="ticket_subject", payload={})
+        self._safe_send(
+            chat_id,
+            "موضوع تیکت را در یک پیام کوتاه بنویسید. برای لغو، /cancel را ارسال کنید.",
+            inline_keyboard([[("لغو", f"{self._index_of(member)}:home")]]),
+        )
+
+    def _handle_conversation(self, user: TelegramUser, chat_id: int, text: str) -> bool:
+        conversation = self._get_conversation(user)
+        if conversation is None:
+            return False
+        if text.startswith("/cancel"):
+            self._clear_conversation(conversation)
+            self._safe_send(chat_id, "ثبت تیکت لغو شد.", inline_keyboard([[("منوی اصلی", "h")]]))
+            return True
+        if text.startswith("/"):
+            self._clear_conversation(conversation)
+            return False
+
+        now = utcnow()
+        if conversation.expires_at < now:
+            self._clear_conversation(conversation)
+            self._safe_send(chat_id, "زمان تکمیل تیکت به پایان رسید. لطفا از منو دوباره شروع کنید.")
+            return True
+
+        member = next(
+            (
+                item
+                for item in LicenseService.access_memberships(self.db, user)
+                if str(item.id) == str(conversation.payload.get("member_id"))
+            ),
+            None,
+        )
+        if member is None:
+            self._clear_conversation(conversation)
+            self._safe_send(chat_id, "دسترسی شما به این پروژه فعال نیست. لطفا /start را بزنید.")
+            return True
+
+        if conversation.step == "ticket_subject":
+            if len(text) < 3:
+                self._safe_send(chat_id, "موضوع خیلی کوتاه است. یک موضوع واضح تر بنویسید.")
+                return True
+            conversation.step = "ticket_body"
+            conversation.payload = {**conversation.payload, "subject": text[:200]}
+            conversation.expires_at = now + timedelta(minutes=CONVERSATION_TTL_MINUTES)
+            self.db.flush()
+            self._safe_send(
+                chat_id,
+                "متن کامل تیکت را بنویسید. می توانید چند خط توضیح بدهید.",
+                inline_keyboard([[("لغو", "cancel")]]),
+            )
+            return True
+
+        if conversation.step == "ticket_reply":
+            ticket_id = conversation.payload.get("ticket_id")
+            try:
+                ticket = TicketService.get(self.db, uuid.UUID(str(ticket_id)))
+                if ticket.member_id != member.id:
+                    raise ApiError(403, "forbidden", "این تیکت متعلق به شما نیست.")
+                TicketService.reply(
+                    self.db,
+                    ticket=ticket,
+                    body=text,
+                    author_type="employer",
+                    member=member,
+                    actor=actor_for_employer(member),
+                    channel="telegram",
+                )
+                self.db.commit()
+            except ApiError as exc:
+                self.db.rollback()
+                self._safe_send(chat_id, html_escape(exc.message))
+                return True
+            except Exception:  # noqa: BLE001
+                self.db.rollback()
+                logger.exception("Ticket reply from Telegram failed")
+                self._safe_send(chat_id, "ارسال پاسخ انجام نشد. لطفا بعدا دوباره تلاش کنید.")
+                return True
+            self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                "پاسخ شما ثبت شد و برای تیم پشتیبانی ارسال می شود.",
+                inline_keyboard([[("بازگشت به منو", f"{self._index_of(member)}:home")]]),
+            )
+            return True
+
+        if conversation.step == "ticket_body":
+            subject = str(conversation.payload.get("subject") or "درخواست پشتیبانی")
+            try:
+                ticket = TicketService.create(
+                    self.db,
+                    project=member.project,
+                    subject=subject,
+                    body=text,
+                    created_by_type="employer",
+                    member=member,
+                    admin_id=None,
+                    actor=actor_for_employer(member),
+                    channel="telegram",
+                )
+                self.db.commit()
+            except ApiError as exc:
+                self.db.rollback()
+                self._safe_send(chat_id, html_escape(exc.message))
+                return True
+            except Exception:  # noqa: BLE001
+                self.db.rollback()
+                logger.exception("Ticket creation from Telegram failed")
+                self._safe_send(chat_id, "ثبت تیکت انجام نشد. لطفا بعدا دوباره تلاش کنید.")
+                return True
+            self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                "تیکت شما ثبت شد. پاسخ تیم پشتیبانی از طریق همین ربات اطلاع داده می شود.\n"
+                f"شماره پیگیری: <code>{str(ticket.id)[:8]}</code>",
+                inline_keyboard([[("بازگشت به منو", f"{self._index_of(member)}:home")]]),
+            )
+            return True
+
+        self._clear_conversation(conversation)
+        return False
+
+    def _set_conversation(
+        self, user: TelegramUser, member: ProjectMember, *, step: str, payload: dict
+    ) -> None:
+        from app.models.ticket import TelegramConversation
+
+        now = utcnow()
+        conversation = self.db.scalar(
+            select(TelegramConversation).where(
+                TelegramConversation.telegram_user_id == user.id,
+                TelegramConversation.project_id == member.project_id,
+            )
+        )
+        expires = now + timedelta(minutes=CONVERSATION_TTL_MINUTES)
+        values = {
+            "step": step,
+            "payload": {**payload, "member_id": str(member.id)},
+            "expires_at": expires,
+            "completed": False,
+            "updated_at": now,
+        }
+        if conversation is None:
+            conversation = TelegramConversation(
+                telegram_user_id=user.id,
+                project_id=member.project_id,
+                created_at=now,
+                **values,
+            )
+            self.db.add(conversation)
+        else:
+            for key, value in values.items():
+                setattr(conversation, key, value)
+        self.db.flush()
+
+    def _get_conversation(self, user: TelegramUser):
+        from app.models.ticket import TelegramConversation
+
+        return self.db.scalar(
+            select(TelegramConversation)
+            .where(
+                TelegramConversation.telegram_user_id == user.id,
+                TelegramConversation.completed.is_(False),
+            )
+            .order_by(TelegramConversation.updated_at.desc())
+        )
+
+    def _clear_conversation(self, conversation) -> None:
+        self.db.delete(conversation)
+        self.db.flush()
+
+    def _index_of(self, member: ProjectMember) -> int:
+        memberships = LicenseService.access_memberships(self.db, member.telegram_user)
+        return next(
+            (position for position, item in enumerate(memberships) if item.id == member.id), 0
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _upsert_user(self, sender: dict) -> TelegramUser:
+        return TelegramUserRepository.upsert(
+            self.db,
+            telegram_id=int(sender["id"]),
+            username=sender.get("username"),
+            first_name=sender.get("first_name"),
+            last_name=sender.get("last_name"),
+            now=utcnow(),
+        )
+
+    def _record_update(self, update: dict) -> None:
+        now = utcnow()
+        state = self.db.get(SystemState, "telegram_last_update_at")
+        value = {
+            "at": now.isoformat(),
+            "update_id": update.get("update_id"),
+        }
+        if state is None:
+            state = SystemState(key="telegram_last_update_at", value=value, updated_at=now)
+            self.db.add(state)
+        else:
+            state.value = value
+            state.updated_at = now
+        self.db.flush()
+
+    def _safe_send(self, chat_id: int, text: str, keyboard: dict | None = None) -> None:
+        try:
+            self.adapter.send_message(chat_id, text, keyboard)
+        except TelegramError as exc:
+            logger.warning("Telegram send failed for chat %s: %s", chat_id, type(exc).__name__)
+
+    # ------------------------------------------------------------------
+    # Used by the worker after an admin approves a membership
+    # ------------------------------------------------------------------
+    @staticmethod
+    def send_approval_welcome(
+        db: Session,
+        adapter: TelegramAdapter,
+        settings: Settings,
+        *,
+        member: ProjectMember,
+        chat_id: int,
+    ) -> None:
+        project = member.project
+        flags = {feature.key: feature.enabled for feature in project.features}
+        memberships = LicenseService.access_memberships(db, member.telegram_user)
+        index = next(
+            (position for position, item in enumerate(memberships) if item.id == member.id), 0
+        )
+        text = (
+            f"اتصال شما به پروژه <b>{html_escape(project.name)}</b> تایید شد.\n\n"
+            "از این پس اطلاعیه ها و وضعیت مالی پروژه را از همین ربات دریافت می کنید."
+        )
+        enabled = enabled_features(flags)
+        keyboard = (
+            project_menu_buttons(index, flags)
+            if enabled
+            else inline_keyboard([[("راهنما", "help")]])
+        )
+        # Errors propagate so the worker can classify them: transient errors are
+        # retried, unknown outcomes are not (duplicate risk).
+        adapter.send_message(chat_id, truncate(text), keyboard)

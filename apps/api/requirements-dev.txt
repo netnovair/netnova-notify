@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest==8.4.2
+pytest-cov==6.3.0
+ruff==0.17.1
+# Embedded PostgreSQL for sandbox/CI smoke work; not used on Windows.
+pgserver==0.1.4; sys_platform == "linux"

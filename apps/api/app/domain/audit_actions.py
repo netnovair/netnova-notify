@@ -1,0 +1,55 @@
+"""Audit action codes and their Persian labels."""
+
+from __future__ import annotations
+
+ACTION_LABELS: dict[str, str] = {
+    "auth.login": "ورود مدیر",
+    "auth.login_failed": "تلاش ناموفق برای ورود",
+    "auth.logout": "خروج مدیر",
+    "project.created": "ایجاد پروژه",
+    "project.updated": "ویرایش پروژه",
+    "project.status_changed": "تغییر وضعیت پروژه",
+    "project.features_updated": "تغییر قابلیت های پروژه",
+    "project.channel_updated": "تغییر کانال ارسال پروژه",
+    "project.archived": "بایگانی پروژه",
+    "project.restored": "بازگردانی پروژه",
+    "project.deleted": "حذف قطعی پروژه",
+    "project.demo_purged": "پاک سازی داده های نمایشی",
+    "admin.created": "ایجاد مدیر جدید",
+    "admin.updated": "ویرایش مدیر",
+    "admin.password_changed": "تغییر رمز عبور مدیر",
+    "admin.password_reset": "بازنشانی رمز عبور مدیر",
+    "ticket.created": "ثبت تیکت",
+    "ticket.replied": "پاسخ به تیکت",
+    "ticket.status_changed": "تغییر وضعیت تیکت",
+    "license.issued": "صدور لایسنس",
+    "license.revoked": "لغو لایسنس",
+    "license.expired": "انقضای لایسنس",
+    "license.activated": "فعال سازی لایسنس",
+    "member.activation_requested": "درخواست اتصال کارفرما",
+    "member.approved": "تایید اتصال کارفرما",
+    "member.revoked": "لغو دسترسی کارفرما",
+    "member.connect_message_queued": "ثبت پیام خوش آمدگویی",
+    "member.channel_saved": "ثبت مقصد کانال کارفرما",
+    "member.channel_removed": "حذف مقصد کانال کارفرما",
+    "notification.created": "ثبت اطلاعیه",
+    "notification.queued": "قرارگیری اطلاعیه در صف",
+    "notification.sent": "ارسال موفق اطلاعیه",
+    "notification.failed": "ارسال ناموفق اطلاعیه",
+    "notification.cancelled": "لغو اطلاعیه",
+    "notification.retry_requested": "درخواست تلاش مجدد ارسال",
+    "notification.skipped": "رد شدن از ارسال اطلاعیه",
+    "payment.created": "ثبت پرداخت",
+    "payment.updated": "ویرایش پرداخت",
+    "payment.marked_paid": "ثبت پرداخت به عنوان تسویه شده",
+    "payment.cancelled": "لغو پرداخت",
+    "payment.reminder_scheduled": "زمان بندی یادآوری پرداخت",
+    "payment.reminder_skipped": "رد شدن از یادآوری پرداخت",
+    "payment.reminder_sent": "ارسال یادآوری پرداخت",
+    "job.failed": "خطای نهایی کار پس زمینه",
+    "system.bootstrap_admin_created": "ایجاد مدیر اولیه",
+}
+
+
+def action_label(action: str) -> str:
+    return ACTION_LABELS.get(action, action)
