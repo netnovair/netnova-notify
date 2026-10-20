@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
 from app.core.rate_limit import rate_limiter
 from tests.helpers import (
     activate_employer,
@@ -11,6 +12,10 @@ from tests.helpers import (
     last_message,
     telegram_update,
 )
+
+_SETTINGS = get_settings()
+_ADMIN_EMAIL = _SETTINGS.bootstrap_admin_email
+_ADMIN_PASSWORD = _SETTINGS.bootstrap_admin_password
 
 
 def _prepare_project(admin_client: TestClient, name: str, telegram_id: int) -> dict:
@@ -166,7 +171,7 @@ def test_license_activation_rate_limit_message(admin_client: TestClient, mock_ad
 def test_foreign_origin_is_rejected_on_login(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": "https://evil.example.com"},
     )
     assert response.status_code == 403
@@ -176,7 +181,7 @@ def test_foreign_origin_is_rejected_on_login(client: TestClient) -> None:
 def test_trusted_origin_is_accepted_on_login(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": "http://localhost:3000"},
     )
     assert response.status_code == 200
@@ -199,7 +204,7 @@ def test_dev_preview_origin_regex_only_applies_in_development(
     monkeypatch.setattr(deps, "get_settings", lambda: dev)
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": preview},
     )
     assert response.status_code == 200
@@ -216,7 +221,7 @@ def test_dev_preview_origin_regex_only_applies_in_development(
     monkeypatch.setattr(deps, "get_settings", lambda: production)
     rejected = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": preview},
     )
     assert rejected.status_code == 403
@@ -251,7 +256,7 @@ def test_dev_preview_session_cookie_is_usable_inside_a_third_party_iframe(
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": preview},
     )
     assert response.status_code == 200
@@ -264,7 +269,7 @@ def test_dev_preview_session_cookie_is_usable_inside_a_third_party_iframe(
 def test_default_session_cookie_stays_same_site_lax(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": "http://localhost:3000"},
     )
     assert response.status_code == 200
@@ -295,7 +300,7 @@ def test_dev_preview_bearer_fallback_authenticates_without_the_cookie(
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Origin": preview},
     )
     assert response.status_code == 200
@@ -346,7 +351,7 @@ def test_production_never_returns_the_dev_session_token(client: TestClient, monk
     monkeypatch.setattr(deps, "get_settings", lambda: production)
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
         headers={"Host": "3000-abc123.e2b.app"},
     )
     # The production settings require COOKIE_SECURE; the response must not leak a token.
@@ -372,7 +377,7 @@ def test_development_always_returns_a_bearer_token_even_without_origin(
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
     )
     assert response.status_code == 200
     token = response.json()["dev_session_token"]
@@ -398,7 +403,7 @@ def test_stale_cookie_does_not_block_a_valid_bearer_token(client: TestClient, mo
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
     )
     token = response.json()["dev_session_token"]
     client.cookies.set("nn_session", "stale-or-garbage-token")
@@ -421,7 +426,7 @@ def test_dev_preview_accepts_the_custom_session_header(client: TestClient, monke
 
     response = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@netnova.ir", "password": "Test-Admin-Pass-123"},
+        json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
     )
     token = response.json()["dev_session_token"]
     client.cookies.clear()
