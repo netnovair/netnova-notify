@@ -18,6 +18,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import { HomeAccountingSummary } from "@/features/accounting/HomeAccountingSummary";
 import { Badge } from "@/components/ui/Badge";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ErrorState, InlineAlert, LoadingState } from "@/components/ui/States";
@@ -249,6 +250,8 @@ export default function DashboardPage() {
               href="/licenses"
             />
           </div>
+
+          <HomeAccountingSummary />
 
           <div className="mt-4 grid gap-4 lg:grid-cols-3">
             <section className="panel p-5 lg:col-span-2" aria-labelledby="recent-activity-title">

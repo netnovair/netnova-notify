@@ -243,6 +243,8 @@ def payment_out(
         project_name=project_name,
         title=payment.title,
         amount_minor=payment.amount_minor,
+        amount_paid_minor=payment.amount_paid_minor,
+        remaining_minor=max(0, payment.amount_minor - payment.amount_paid_minor),
         currency=payment.currency,
         due_at=payment.due_at,
         status=payment.status,

@@ -128,9 +128,13 @@ class PaymentService:
         now = utcnow()
         if payment.status == PaymentStatus.PAID.value:
             return payment
-        if payment.status != PaymentStatus.UNPAID.value:
+        if payment.status not in (
+            PaymentStatus.UNPAID.value,
+            PaymentStatus.PARTIALLY_PAID.value,
+        ):
             raise conflict("این پرداخت در وضعیت فعلی قابل تسویه نیست.")
         payment.status = PaymentStatus.PAID.value
+        payment.amount_paid_minor = payment.amount_minor
         payment.paid_at = now
         payment.updated_at = now
         JobRepository.cancel(db, payment.reminder_job_id, now)
@@ -156,6 +160,7 @@ class PaymentService:
         if payment.status == PaymentStatus.CANCELLED.value:
             return payment
         payment.status = PaymentStatus.CANCELLED.value
+        payment.amount_paid_minor = 0
         payment.cancelled_at = now
         payment.updated_at = now
         JobRepository.cancel(db, payment.reminder_job_id, now)
@@ -238,8 +243,11 @@ class PaymentService:
             PaymentService._skip(db, job, None, "پرداخت یافت نشد.", now)
             return
 
-        if payment.status != PaymentStatus.UNPAID.value:
-            PaymentService._skip(db, job, payment, "پرداخت دیگر در وضعیت پرداخت نشده نیست.", now)
+        if payment.status not in (
+            PaymentStatus.UNPAID.value,
+            PaymentStatus.PARTIALLY_PAID.value,
+        ):
+            PaymentService._skip(db, job, payment, "پرداخت دیگری در وضعیت باز نیست.", now)
             return
 
         if job.payload.get("due_at") and job.payload["due_at"] != payment.due_at.isoformat():

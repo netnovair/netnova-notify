@@ -55,6 +55,9 @@ class PaymentOut(ORMModel):
     project_name: str | None = None
     title: str
     amount_minor: int
+    #: Sum of approved receipt allocations; 0 for a fresh invoice.
+    amount_paid_minor: int = 0
+    remaining_minor: int = 0
     currency: str
     due_at: datetime
     status: str

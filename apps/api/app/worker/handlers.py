@@ -11,10 +11,14 @@ from app.adapters.telegram.base import (
     TelegramError,
     UnknownTelegramError,
 )
+from app.adapters.telegram.formatting import inline_keyboard, url_keyboard
 from app.core.config import Settings
+from app.core.security import utcnow
+from app.domain.payments import format_amount
 from app.models.job import ScheduledJob
 from app.repositories.licenses import MemberRepository
 from app.repositories.notifications import NotificationRepository
+from app.services.audit import Actor, AuditService
 from app.services.licenses import LicenseService
 from app.services.notifications import NotificationService
 from app.services.payments import PaymentService
@@ -158,7 +162,124 @@ def _forward_attachments(adapter: TelegramAdapter, chat_id: int, message) -> Non
             )
 
 
+
+def handle_receipt_submitted(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Short admin alert for a new receipt; the review itself happens in the panel."""
+    from app.models.accounting import PaymentReceipt
+
+    raw_id = job.payload.get("receipt_id")
+    if not raw_id or not settings.admin_telegram_chat_id:
+        return
+    receipt = db.get(PaymentReceipt, uuid.UUID(str(raw_id)))
+    if receipt is None:
+        logger.info("receipt %s no longer exists; admin alert skipped", raw_id)
+        return
+    project = receipt.project
+    who = ""
+    if receipt.member is not None and receipt.member.telegram_user is not None:
+        user = receipt.member.telegram_user
+        who = " ".join(part for part in (user.first_name, user.last_name) if part) or (
+            f"@{user.username}" if user.username else str(user.telegram_id)
+        )
+    lines = [
+        "<b>رسید پرداخت جدید</b>",
+        f"پروژه: {project.name if project else '-'}",
+        f"مبلغ اعلامی: {format_amount(receipt.amount_minor, receipt.currency)}",
+    ]
+    if who:
+        lines.append(f"فرستنده: {who}")
+    if receipt.tracking_code:
+        lines.append(f"کد پیگیری: {receipt.tracking_code}")
+    if receipt.files:
+        lines.append(f"تصویر: {len(receipt.files)} فایل")
+    lines.append("")
+    lines.append("برای تایید یا رد، در پنل مدیریت بخش پرداخت ها را باز کنید.")
+    keyboard = url_keyboard(
+        [[("باز کردن پنل", f"{settings.next_public_site_url.rstrip('/')}/payments")]]
+    )
+    adapter.send_message(settings.admin_telegram_chat_id, "\n".join(lines), keyboard)
+    for file in receipt.files:
+        try:
+            adapter.send_media(settings.admin_telegram_chat_id, file.data, file.filename)
+        except TelegramError:
+            logger.warning("Could not forward receipt image %s", file.id)
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action="receipt.admin_notified",
+        entity_type="payment_receipt",
+        entity_id=receipt.id,
+        project_id=receipt.project_id,
+        context={"files": len(receipt.files)},
+        now=utcnow(),
+    )
+
+
+def handle_receipt_result(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Tell the employer the review result, with the updated balance."""
+    from app.models.accounting import PaymentReceipt
+    from app.services.accounting import AccountingService, TemplateService
+
+    raw_id = job.payload.get("receipt_id")
+    if not raw_id:
+        return
+    receipt = db.get(PaymentReceipt, uuid.UUID(str(raw_id)))
+    if receipt is None or receipt.member is None or receipt.member.telegram_user is None:
+        return
+    member = receipt.member
+    if member.status != "active" or member.project is None or member.project.archived_at:
+        return
+    project = member.project
+    totals = AccountingService.project_totals(db, project.id)
+    total = next((row for row in totals if row.currency == receipt.currency), None)
+    remaining = (
+        format_amount(total.balance_minor, total.currency)
+        if total is not None
+        else format_amount(0, receipt.currency)
+    )
+    status_text = "تسویه" if total is not None and total.settled else "بدهی باقی مانده"
+    approved = bool(job.payload.get("approved"))
+    values = {
+        "project": project.name,
+        "amount": format_amount(receipt.amount_minor, receipt.currency),
+        "remaining": remaining,
+        "status": status_text,
+        "reason": receipt.review_note or "بررسی تیم پشتیبانی",
+    }
+    key = "receipt_approved" if approved else "receipt_rejected"
+    text = TemplateService.render(db, key, project_id=project.id, values=values)
+    chat_id = int(member.telegram_user.telegram_id)
+    memberships = LicenseService.access_memberships(db, member.telegram_user)
+    index = next(
+        (position for position, item in enumerate(memberships) if item.id == member.id), None
+    )
+    rows: list[list[tuple[str, str]]] = []
+    if index is not None:
+        rows.append([("وضعیت مالی", f"{index}:fin")])
+        if not approved:
+            rows.append([("ثبت تیکت", f"{index}:newticket")])
+        rows.append([("منوی اصلی", f"{index}:home")])
+    keyboard = inline_keyboard(rows) if rows else None
+    adapter.send_message(chat_id, text, keyboard)
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action=f"receipt.{'approved' if approved else 'rejected'}_sent",
+        entity_type="payment_receipt",
+        entity_id=receipt.id,
+        project_id=project.id,
+        context={"chat_id": chat_id},
+        now=utcnow(),
+    )
+
+
 HANDLERS = {
+    "receipt_submitted": handle_receipt_submitted,
+    "receipt_result": handle_receipt_result,
     "notification_send": handle_notification_send,
     "payment_reminder": handle_payment_reminder,
     "activation_approved": handle_activation_approved,

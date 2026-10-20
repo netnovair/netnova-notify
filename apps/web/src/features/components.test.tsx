@@ -43,6 +43,8 @@ const paymentBase: Payment = {
   updated_at: "2026-10-19T10:00:00Z",
   is_overdue: false,
   next_reminder_at: "2026-10-29T20:30:00Z",
+  amount_paid_minor: 0,
+  remaining_minor: 5_000_000,
 };
 
 const projectBase: Project = {
