@@ -75,6 +75,87 @@ class HttpTelegramAdapter:
         result = self._call("sendMessage", payload)
         return SendResult(message_id=int(result["message_id"]))
 
+    def send_media(
+        self,
+        chat_id: int,
+        data: bytes,
+        filename: str,
+        *,
+        as_document: bool = False,
+        caption: str | None = None,
+    ) -> SendResult:
+        """Upload an attachment as a photo or a document.
+
+        Telegram caps a photo at 10 MB; anything bigger is sent as a document,
+        which keeps the original bytes intact for the recipient.
+        """
+        field = "document" if as_document or len(data) > 10 * 1024 * 1024 else "photo"
+        payload: dict = {"chat_id": str(chat_id)}
+        if caption:
+            payload["caption"] = caption[:1024]
+            payload["parse_mode"] = "HTML"
+        try:
+            response = self._client.post(
+                f"/send{field.capitalize()}",
+                data=payload,
+                files={field: (filename, data, "application/octet-stream")},
+            )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise UnknownTelegramError(f"Telegram transport failure: {type(exc).__name__}") from exc
+        if response.status_code == 200:
+            body = response.json()
+            if not body.get("ok"):
+                raise PermanentTelegramError(str(body.get("description", "rejected")))
+            result = body.get("result") or {}
+            return SendResult(message_id=int(result.get("message_id") or 0))
+        if response.status_code == 429 or response.status_code >= 500:
+            raise TemporaryTelegramError(f"Telegram temporary error {response.status_code}")
+        raise PermanentTelegramError(f"Telegram rejected the file {response.status_code}")
+
+    def send_photo_url(
+        self, chat_id: int, photo_url: str, caption: str | None = None
+    ) -> SendResult:
+        """Send a portfolio image by public URL.
+
+        Telegram fetches the file itself, so the API never proxies or stores
+        customer artwork. Only https URLs pass validation upstream.
+        """
+        payload: dict = {"chat_id": chat_id, "photo": photo_url}
+        if caption:
+            payload["caption"] = caption[:1024]
+            payload["parse_mode"] = "HTML"
+        result = self._call("sendPhoto", payload)
+        return SendResult(message_id=int(result.get("message_id") or 0))
+
+    def download_file(self, file_id: str, max_bytes: int) -> bytes:
+        """Download a file the user sent to the bot.
+
+        ``getFile`` only returns a path; the bytes live on a separate CDN host.
+        The size is checked twice (before and after the download) so a malicious
+        client cannot exhaust memory.
+        """
+        info = self._call("getFile", {"file_id": file_id})
+        file_path = info.get("file_path")
+        if not file_path:
+            raise PermanentTelegramError("Telegram did not return a file path.")
+        expected = int(info.get("file_size") or 0)
+        if expected and expected > max_bytes:
+            raise PermanentTelegramError("Telegram file is larger than the allowed size.")
+        try:
+            response = self._client.get(f"{API_BASE}/file/bot{self._token}/{file_path}")
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise UnknownTelegramError(f"Telegram transport failure: {type(exc).__name__}") from exc
+        if response.status_code != 200:
+            raise PermanentTelegramError(f"Telegram file download failed {response.status_code}")
+        data = response.content
+        if len(data) > max_bytes:
+            raise PermanentTelegramError("Telegram file is larger than the allowed size.")
+        return data
+
+    def set_my_commands(self, commands: list[dict]) -> bool:
+        result = self._call("setMyCommands", {"commands": commands})
+        return bool(result)
+
     def answer_callback(self, callback_query_id: str, text: str | None = None) -> None:
         payload: dict = {"callback_query_id": callback_query_id}
         if text:

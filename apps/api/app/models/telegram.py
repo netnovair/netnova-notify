@@ -25,6 +25,13 @@ class TelegramUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     username: Mapped[str | None] = mapped_column(String(120), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    #: Remembered so a returning visitor is not asked for the basics again.
+    contact_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: When the persistent reply keyboard was last sent (avoids re-sending it).
+    menu_keyboard_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     memberships: Mapped[list[ProjectMember]] = relationship(back_populates="telegram_user")
 

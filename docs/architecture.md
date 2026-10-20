@@ -98,6 +98,44 @@ duplicate members or duplicate welcome messages. A second Telegram user cannot b
 a license already bound to another employer. Revoking the license revokes the linked
 member's access.
 
+### 4.2.1 Order intake (ثبت سفارش)
+
+The bot has a second, license-free entry point for prospective clients:
+
+```text
+Visitor → /start ──► «ثبت سفارش» ──► categories (active, with ≥1 active item)
+                                  ──► sub services of the chosen category
+                                  ──► «نمونه کارها» (text + optional https photo)
+                                  ──► name/phone (only the first time)
+                                  ──► questions of the chosen sub service
+                                  ──► review ──► submit ──► service_requests
+```
+
+Design rules:
+
+- **The database is the menu.** `CatalogService.public_tree()` is read on every step, so
+  panel edits (add/rename/reorder/disable a service or a question) apply to the next
+  message without a deploy, restart or cache invalidation.
+- **Index-only callbacks.** `oc:<n>`, `oi:<n>:<m>`, `oq:<q>:<o>` carry positions inside
+  the current tree, never UUIDs; each tap re-resolves them against fresh data, so a
+  stale keyboard cannot address a different service.
+- **Identity once.** `telegram_users.contact_name/contact_phone` are filled the first time
+  and reused for every later order of that user.
+- **Server-side validation.** `validate_answer()` enforces required fields, numeric
+  bounds (for example the 800-word minimum of content articles), choice membership and
+  Iranian mobile numbers; Persian/Arabic digits and `+98` are normalised first.
+- **Snapshots.** The submitted order copies the category/item titles and the answers as
+  JSON, so later catalog edits never rewrite an order's history.
+- **No fabrication.** Portfolio copy and image URLs come from the panel; an empty
+  portfolio says so instead of inventing case studies.
+- **One active flow per user.** Starting an order cancels a ticket conversation and
+  vice versa; `/cancel`, «منوی من» and `/start` clear the in-progress session. Sessions
+  expire after 45 minutes.
+
+`OrderSession` rows are deliberately separate from `telegram_conversations`:
+`TelegramConversation.project_id` requires a project, but orders must work before any
+license exists.
+
 ### 4.3 Notification lifecycle
 
 ```text

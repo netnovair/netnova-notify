@@ -28,6 +28,9 @@ feature flags, employer access and financial records.
 | گزارش عملکرد / پیشرفت پروژه | Placeholder | «به زودی» via the capability registry |
 | Capability plugins per project | Implemented | Add a module in `app/features/`; no migration or panel change |
 | Two-way support tickets | Implemented | Telegram conversation + admin inbox, unread counters, close/reopen |
+| Order intake for unlicensed visitors (ثبت سفارش) | Implemented | Service tree, per-service questions, identity asked once, dashboard CRUD |
+| Sample works (نمونه کار) | Implemented | Text + optional https image per service, sent by the bot on demand |
+| Pre-sales order inbox | Implemented | `/orders` in the panel: filters, counters, status workflow, internal note |
 | Bale / Eitaa / SMS.ir channels | Beta | Configured centrally by env; per-project toggle; honest `configured` state |
 | Announcement queue + worker | Implemented | Retries, backoff, stale-claim recovery, unknown-result handling |
 | Payments and scheduled reminders | Implemented | Statuses unpaid/paid/cancelled, overdue computed, no gateway |
@@ -166,6 +169,33 @@ Production refuses to start with placeholder secrets or `COOKIE_SECURE=false`.
    reply to an existing thread. Messages go through `telegram_conversations`, so the
    callback data stays id-free. The admin answers from **پشتیبانی** in the panel and the
    employer gets a short Telegram notice.
+
+### Order intake (ثبت سفارش)
+
+The same bot serves visitors who have **no license and no project**:
+
+1. `/start` shows «ثبت سفارش» and «نمونه کارها», plus a persistent reply keyboard
+   (`ثبت سفارش` / `منوی من` / `راهنما`). `/start`, `/menu`, `/cancel`, `/help` are
+   registered with Telegram through `setMyCommands`.
+2. «ثبت سفارش» lists the active main services from the database, so the panel is the
+   only place that defines the menu. Callback data is index based (`oc:<n>`,
+   `oi:<n>:<m>`, `oq:<q>:<o>`) and re-resolved against the current tree on every tap.
+3. The visitor picks a sub service and answers its questions. Questions are ordinary
+   rows in `service_questions`: text, long text, number (with min/max), multiple choice
+   or phone. Choice questions become buttons.
+4. Name and phone are asked once per Telegram user and stored in
+   `telegram_users.contact_name/contact_phone`; later orders skip straight to the
+   questions. Phone numbers are normalised (`+98`, Persian digits) and validated as
+   `09xxxxxxxxx`.
+5. Every sub service can expose «نمونه کارها»: a text plus an optional public https
+   image, both edited in the panel. Nothing is fabricated — the copy is whatever the
+   team enters.
+6. The review screen shows the answers; «ثبت نهایی سفارش» writes `service_requests`,
+   replies with a tracking number and (when `ADMIN_TELEGRAM_CHAT_ID` is set) pings the
+   admin. The panel side lives at **سفارش ها**.
+7. **خدمات** in the panel is the CRUD editor for main services, sub services and their
+   questions. Deleting is refused while orders reference the row; deactivate instead to
+   hide it from the bot immediately.
 
 ## Delivery channels
 

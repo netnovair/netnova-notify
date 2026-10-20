@@ -44,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         adapter.set_webhook(args.url, settings.telegram_webhook_secret)
         print(f"Webhook registered: {args.url}")
+        from app.services.telegram_bot import BOT_COMMANDS
+
+        adapter.set_my_commands(BOT_COMMANDS)
+        print(f"Bot commands registered: {', '.join(item['command'] for item in BOT_COMMANDS)}")
         return 0
     except TelegramError as exc:
         print(f"Telegram error: {type(exc).__name__}: {exc}")

@@ -341,6 +341,68 @@ Idempotency ledger for the webhook.
 
 Keys: `worker_heartbeat` (`{hostname, started_at, last_seen_at}`), `telegram_last_update_at`.
 
+### `service_categories`
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `key` | varchar(60) | unique, `[a-z0-9-]` |
+| `title` | varchar(120) | not null |
+| `description` | text | not null, default `''` |
+| `emoji` | varchar(16) | not null, default `''` |
+| `order_index` | integer | not null, default 0 |
+| `is_active` | boolean | not null; inactive categories disappear from the bot |
+| `show_portfolio` | boolean | not null |
+| `portfolio_text` | text | not null |
+| `portfolio_url` | varchar(500) | not null, default `''`; https only |
+| `created_at`, `updated_at` | timestamptz | not null |
+
+### `service_items`
+
+Sub services. `category_id` cascades on delete; `unique (category_id, key)`; same display
+columns as the category plus `portfolio_*`. Index `(category_id, order_index)`.
+
+### `service_questions`
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `item_id` | uuid | FK → `service_items.id`, cascade |
+| `key` | varchar(60) | unique per item |
+| `label` | varchar(300) | not null |
+| `help_text` | varchar(500) | not null, default `''` |
+| `field_type` | varchar(20) | `text`, `long_text`, `number`, `choice`, `phone` |
+| `required` | boolean | not null |
+| `options` | jsonb | list of strings for `choice` |
+| `min_value`, `max_value` | integer | nullable, `number` only |
+| `order_index` | integer | not null |
+
+### `service_requests` (pre-sales orders)
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `category_id`, `item_id` | uuid | FK, `ON DELETE SET NULL` |
+| `telegram_user_id` | uuid | FK, `ON DELETE SET NULL` |
+| `category_title`, `item_title` | varchar(120) | snapshot at submit time |
+| `contact_name`, `contact_phone` | varchar | not null |
+| `answers` | jsonb | `[{key,label,value}]` snapshot |
+| `status` | varchar(20) | `new`, `contacted`, `quoted`, `won`, `lost`, `cancelled` |
+| `admin_note` | text | not null, default `''` |
+| `source` | varchar(20) | `telegram` |
+| `telegram_username`, `telegram_id` | varchar / bigint | nullable copy for follow-up |
+| `created_at`, `updated_at` | timestamptz | not null |
+
+Indexes: `(status, created_at)` and `telegram_user_id`.
+
+### `order_sessions`
+
+Short-lived state of one in-progress order: `telegram_user_id` (unique, cascade),
+`step` (`contact_name`, `contact_phone`, `question`, `confirm`), `payload` jsonb
+(`item_id`, answers, question index, contact values) and `expires_at` (45 minutes).
+Expired sessions are dropped on the next message. It is intentionally separate from
+`telegram_conversations`, because an order is not attached to a project.
+
 ## 3. Invariants
 
 1. A project has at most one live license; issuing revokes the previous one.
@@ -351,6 +413,11 @@ Keys: `worker_heartbeat` (`{hostname, started_at, last_seen_at}`), `telegram_las
 5. `dedupe_key` prevents duplicate queue entries for the same logical event.
 6. Delivered attempts are immutable; retries create new attempt rows.
 7. Demo rows (`is_demo`) are excluded from operational conclusions and clearly labelled.
+8. Only active categories with at least one active sub service appear in the bot menu.
+9. A category or sub service with orders cannot be deleted; it can be deactivated.
+10. A submitted order keeps its own title/answer snapshot; catalog edits never rewrite it.
+11. `telegram_users.contact_name/contact_phone` are the single identity record reused by
+    every later order of the same Telegram user.
 
 ## 4. Migrations
 
@@ -359,6 +426,8 @@ Keys: `worker_heartbeat` (`{hostname, started_at, last_seen_at}`), `telegram_las
 - Check for drift in development: `alembic check`.
 - Never edit an applied migration; add a new revision.
 - The initial revision is `a182707c5525_initial_schema.py`.
+- Catalog/order chain: `220daa4e4a31` (catalog, orders, order sessions, bot menu state)
+  then `f47e1ad75e31` (portfolio image URL). Current head: `f47e1ad75e31`.
 - CI applies migrations from an empty database before running tests, proving the
   migration chain works.
 

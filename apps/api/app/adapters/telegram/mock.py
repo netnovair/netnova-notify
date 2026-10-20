@@ -32,6 +32,55 @@ class MockTelegramAdapter:
         logger.info("Mock Telegram message #%s to chat %s: %s", index, chat_id, text[:80])
         return SendResult(message_id=None, is_mock=True)
 
+    def send_media(
+        self,
+        chat_id: int,
+        data: bytes,
+        filename: str,
+        *,
+        as_document: bool = False,
+        caption: str | None = None,
+    ) -> SendResult:
+        with self._lock:
+            index = next(self._counter)
+            self.sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": caption or "",
+                    "keyboard": None,
+                    "mock_id": index,
+                    "media": {"filename": filename, "size": len(data), "document": as_document},
+                }
+            )
+        logger.info("Mock Telegram file #%s (%s, %s bytes)", index, filename, len(data))
+        return SendResult(message_id=None, is_mock=True)
+
+    def send_photo_url(
+        self, chat_id: int, photo_url: str, caption: str | None = None
+    ) -> SendResult:
+        with self._lock:
+            index = next(self._counter)
+            self.sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": caption or "",
+                    "keyboard": None,
+                    "mock_id": index,
+                    "photo": photo_url,
+                }
+            )
+        logger.info("Mock Telegram photo #%s (%s)", index, photo_url)
+        return SendResult(message_id=None, is_mock=True)
+
+    def download_file(self, file_id: str, max_bytes: int) -> bytes:
+        # Deterministic placeholder so tests can assert the upload path without a network.
+        return f"mock-file:{file_id}".encode()
+
+    def set_my_commands(self, commands: list[dict]) -> bool:
+        self.commands = list(commands)
+        logger.info("Mock setMyCommands with %s commands", len(commands))
+        return True
+
     def answer_callback(self, callback_query_id: str, text: str | None = None) -> None:
         logger.info("Mock callback answer %s: %s", callback_query_id, text or "")
 

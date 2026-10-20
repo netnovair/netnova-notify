@@ -1,8 +1,10 @@
 import {
   BellRing,
+  ClipboardList,
   FolderKanban,
   Home,
   KeyRound,
+  Layers,
   Settings,
   Wallet,
   type LucideIcon,
@@ -23,6 +25,20 @@ export const NAV_ITEMS: NavItem[] = [
     label: "پروژه ها",
     shortLabel: "پروژه ها",
     icon: FolderKanban,
+    group: "manage",
+  },
+  {
+    href: "/orders",
+    label: "سفارش ها",
+    shortLabel: "سفارش",
+    icon: ClipboardList,
+    group: "manage",
+  },
+  {
+    href: "/services",
+    label: "خدمات",
+    shortLabel: "خدمات",
+    icon: Layers,
     group: "manage",
   },
   {

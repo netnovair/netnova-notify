@@ -35,6 +35,29 @@ def menu_keyboard(items: list[tuple[str, str]]) -> dict:
     return inline_keyboard(rows)
 
 
+def reply_keyboard(rows: list[list[str]], placeholder: str | None = None) -> dict:
+    """Persistent keyboard pinned under the message box.
+
+    Unlike an inline keyboard it stays visible after the user scrolls, which is
+    why the bot uses it for the two permanent entry points ("منوی من" and
+    "ثبت سفارش"). Buttons send their label back as a normal text message, so the
+    handler must match those labels explicitly.
+    """
+    payload: dict = {
+        "keyboard": [[{"text": label} for label in row] for row in rows],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+    if placeholder:
+        payload["input_field_placeholder"] = placeholder[:64]
+    return payload
+
+
+def remove_reply_keyboard() -> dict:
+    """Hide the persistent keyboard (used before a multi-step text flow)."""
+    return {"remove_keyboard": True}
+
+
 def format_datetime(value: datetime, tz_name: str) -> str:
     localized = value.astimezone(ZoneInfo(tz_name))
     return localized.strftime("%Y-%m-%d %H:%M")
