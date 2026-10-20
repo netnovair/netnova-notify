@@ -2,6 +2,13 @@
 
 from app.models.admin import AdminSession, AdminUser
 from app.models.audit import AuditLog
+from app.models.catalog import (
+    OrderSession,
+    ServiceCategory,
+    ServiceItem,
+    ServiceQuestion,
+    ServiceRequest,
+)
 from app.models.job import ScheduledJob
 from app.models.license import License
 from app.models.notification import DeliveryAttempt, Notification
@@ -21,6 +28,11 @@ __all__ = [
     "AdminUser",
     "AuditLog",
     "ScheduledJob",
+    "OrderSession",
+    "ServiceCategory",
+    "ServiceItem",
+    "ServiceQuestion",
+    "ServiceRequest",
     "License",
     "DeliveryAttempt",
     "Notification",

@@ -216,6 +216,51 @@ Statuses: `open`, `pending_admin` (employer waiting), `pending_employer` (admin 
 notice for the employer; an employer message queues a notice for `ADMIN_TELEGRAM_CHAT_ID`.
 Neither notice contains the full thread.
 
+### Service catalog and orders
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/catalog` | Full tree (inactive included) + `seeded` + `public_categories` |
+| POST | `/catalog/seed` | Install the default catalog once; never overwrites an existing one |
+| POST | `/catalog/categories` | Create a main service |
+| PATCH | `/catalog/categories/{id}` | Update title, emoji, description, order, flags, portfolio text/url |
+| DELETE | `/catalog/categories/{id}` | `409 category_in_use` once orders reference it |
+| POST | `/catalog/categories/{id}/items` | Create a sub service with its questions |
+| PATCH | `/catalog/items/{id}` | Update a sub service; `questions` replaces the list when present |
+| DELETE | `/catalog/items/{id}` | `409 item_in_use` once orders reference it |
+
+```json
+{
+  "title": "طراحی کارت ویزیت",
+  "description": "کارت ویزیت با فایل آماده چاپ.",
+  "is_active": true,
+  "show_portfolio": true,
+  "portfolio_text": "نمونه کارها ...",
+  "portfolio_url": "https://example.com/samples/card.jpg",
+  "questions": [
+    { "label": "کارت افقی باشد یا عمودی؟", "field_type": "choice",
+      "options": ["افقی", "عمودی"], "required": true },
+    { "label": "توضیحات تکمیلی", "field_type": "long_text", "required": false }
+  ]
+}
+```
+
+`field_type` is one of `text`, `long_text`, `number`, `choice`, `phone`. Choice
+questions need at least two options; `number` accepts optional `min_value`/`max_value`.
+`portfolio_url` must be `https://` or empty — the bot hands the URL to Telegram
+(`sendPhoto`), the API never proxies or stores the image.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/orders?status&search&page&page_size` | Pre-sales order inbox, newest first |
+| GET | `/orders/counters` | Count per status + `total` |
+| GET | `/orders/{id}` | Full answers snapshot, contact, admin note |
+| PATCH | `/orders/{id}` | `{ "status": "...", "admin_note": "..." }` |
+
+Statuses: `new`, `contacted`, `quoted`, `won`, `lost`, `cancelled`. Answers are stored
+as a JSON snapshot (`key`, `label`, `value`) so editing the catalog never rewrites
+history. `contact_phone` is normalised to `09xxxxxxxxx` before storage.
+
 ### Admins
 
 | Method | Path | Description |

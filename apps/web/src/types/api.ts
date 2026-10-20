@@ -332,3 +332,117 @@ export type SystemStatus = {
   pending_jobs: number;
   failed_jobs: number;
 };
+
+// ---------------------------------------------------------------------------
+// Service catalog and pre-sales orders (ثبت سفارش)
+// ---------------------------------------------------------------------------
+export type ServiceQuestionType = "text" | "long_text" | "number" | "choice" | "phone";
+
+export type ServiceQuestion = {
+  id: string;
+  key: string;
+  label: string;
+  help_text: string;
+  field_type: ServiceQuestionType;
+  required: boolean;
+  options: string[];
+  min_value: number | null;
+  max_value: number | null;
+  order_index: number;
+  is_active: boolean;
+};
+
+export type ServiceQuestionInput = {
+  key?: string | null;
+  label: string;
+  help_text?: string;
+  field_type: ServiceQuestionType;
+  required: boolean;
+  options: string[];
+  min_value?: number | null;
+  max_value?: number | null;
+  order_index?: number;
+  is_active?: boolean;
+};
+
+export type ServiceItem = {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  order_index: number;
+  is_active: boolean;
+  show_portfolio: boolean;
+  portfolio_text: string;
+  portfolio_url: string;
+  questions: ServiceQuestion[];
+};
+
+export type ServiceItemInput = {
+  key?: string | null;
+  title: string;
+  description?: string;
+  order_index?: number;
+  is_active?: boolean;
+  show_portfolio?: boolean;
+  portfolio_text?: string;
+  portfolio_url?: string;
+  questions?: ServiceQuestionInput[];
+};
+
+export type ServiceCategory = {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  emoji: string;
+  order_index: number;
+  is_active: boolean;
+  show_portfolio: boolean;
+  portfolio_text: string;
+  portfolio_url: string;
+  items: ServiceItem[];
+};
+
+export type ServiceCategoryInput = {
+  key?: string | null;
+  title: string;
+  description?: string;
+  emoji?: string;
+  order_index?: number;
+  is_active?: boolean;
+  show_portfolio?: boolean;
+  portfolio_text?: string;
+  portfolio_url?: string;
+};
+
+export type ServiceCatalog = {
+  categories: ServiceCategory[];
+  seeded: boolean;
+  public_categories: number;
+};
+
+export type OrderStatus = "new" | "contacted" | "quoted" | "won" | "lost" | "cancelled";
+
+export type OrderListItem = {
+  id: string;
+  category_title: string;
+  item_title: string;
+  contact_name: string;
+  contact_phone: string;
+  status: OrderStatus;
+  source: string;
+  telegram_username: string | null;
+  telegram_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrderAnswer = { key: string; label: string; value: string };
+
+export type Order = OrderListItem & {
+  answers: OrderAnswer[];
+  admin_note: string;
+};
+
+export type OrderCounters = Record<OrderStatus | "total", number>;

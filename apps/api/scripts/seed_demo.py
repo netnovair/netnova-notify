@@ -29,6 +29,7 @@ from app.schemas.notification import NotificationCreate
 from app.schemas.payment import PaymentCreate
 from app.schemas.project import ProjectCreate
 from app.services.audit import Actor
+from app.services.catalog import CatalogService
 from app.services.licenses import LicenseService
 from app.services.notifications import NotificationService
 from app.services.payments import PaymentService
@@ -83,8 +84,19 @@ def main() -> int:
             db.scalar(select(func.count(Project.id)).where(Project.is_demo.is_(True))) or 0
         )
         if existing:
+            # The service catalog is operational configuration, not demo data, so it
+            # is created independently of the demo projects and is safe to seed alone.
+            seeded = CatalogService.seed_defaults(db, actor=SEED_ACTOR)
+            db.commit()
+            if seeded:
+                print(f"Service catalog seeded ({seeded} categories).")
             print(f"Demo data already present ({existing} demo project(s)); nothing to do.")
             return 0
+
+        seeded = CatalogService.seed_defaults(db, actor=SEED_ACTOR)
+        db.commit()
+        if seeded:
+            print(f"Service catalog seeded ({seeded} categories).")
 
         now = utcnow()
         first, first_code = ProjectService.create(

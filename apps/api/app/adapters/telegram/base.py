@@ -46,6 +46,24 @@ class TelegramAdapter(Protocol):
 
     def send_message(self, chat_id: int, text: str, keyboard: dict | None = None) -> SendResult: ...
 
+    def send_media(
+        self,
+        chat_id: int,
+        data: bytes,
+        filename: str,
+        *,
+        as_document: bool = False,
+        caption: str | None = None,
+    ) -> SendResult: ...
+
+    def send_photo_url(
+        self, chat_id: int, photo_url: str, caption: str | None = None
+    ) -> SendResult: ...
+
+    def download_file(self, file_id: str, max_bytes: int) -> bytes: ...
+
+    def set_my_commands(self, commands: list[dict]) -> bool: ...
+
     def answer_callback(self, callback_query_id: str, text: str | None = None) -> None: ...
 
     def set_webhook(self, url: str, secret_token: str) -> bool: ...

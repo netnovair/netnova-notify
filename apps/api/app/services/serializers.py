@@ -7,12 +7,21 @@ from datetime import datetime
 from app.domain.licenses import effective_status
 from app.domain.payments import is_overdue
 from app.models.audit import AuditLog
+from app.models.catalog import ServiceCategory, ServiceItem, ServiceRequest
 from app.models.license import License
 from app.models.notification import Notification
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.telegram import ProjectMember
 from app.schemas.audit import AuditLogOut
+from app.schemas.catalog import (
+    AnswerOut,
+    CategoryOut,
+    ItemOut,
+    QuestionOut,
+    RequestListItem,
+    RequestOut,
+)
 from app.schemas.license import LicenseOut
 from app.schemas.member import MemberOut
 from app.schemas.notification import DeliveryOut, NotificationListItem, NotificationOut
@@ -321,4 +330,89 @@ def ticket_detail(ticket, now: datetime) -> TicketDetail:
         ],
         member_display_name=member_display_name(member) if member else None,
         closed_at=ticket.closed_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Service catalog and pre-sales orders
+# ---------------------------------------------------------------------------
+def question_out(question) -> QuestionOut:
+    return QuestionOut(
+        id=question.id,
+        key=question.key,
+        label=question.label,
+        help_text=question.help_text,
+        field_type=question.field_type,
+        required=question.required,
+        options=[str(option) for option in (question.options or [])],
+        min_value=question.min_value,
+        max_value=question.max_value,
+        order_index=question.order_index,
+        is_active=question.is_active,
+    )
+
+
+def item_out(item: ServiceItem) -> ItemOut:
+    questions = sorted(item.questions, key=lambda row: row.order_index)
+    return ItemOut(
+        id=item.id,
+        key=item.key,
+        title=item.title,
+        description=item.description,
+        order_index=item.order_index,
+        is_active=item.is_active,
+        show_portfolio=item.show_portfolio,
+        portfolio_text=item.portfolio_text,
+        portfolio_url=item.portfolio_url,
+        questions=[question_out(question) for question in questions],
+    )
+
+
+def category_out(category: ServiceCategory) -> CategoryOut:
+    items = sorted(category.items, key=lambda row: row.order_index)
+    return CategoryOut(
+        id=category.id,
+        key=category.key,
+        title=category.title,
+        description=category.description,
+        emoji=category.emoji,
+        order_index=category.order_index,
+        is_active=category.is_active,
+        show_portfolio=category.show_portfolio,
+        portfolio_text=category.portfolio_text,
+        portfolio_url=category.portfolio_url,
+        items=[item_out(item) for item in items],
+    )
+
+
+def request_list_item(request: ServiceRequest) -> RequestListItem:
+    return RequestListItem(
+        id=request.id,
+        category_title=request.category_title,
+        item_title=request.item_title,
+        contact_name=request.contact_name,
+        contact_phone=request.contact_phone,
+        status=request.status,
+        source=request.source,
+        telegram_username=request.telegram_username,
+        telegram_id=request.telegram_id,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
+    )
+
+
+def request_out(request: ServiceRequest) -> RequestOut:
+    answers = [
+        AnswerOut(
+            key=str(item.get("key", "")),
+            label=str(item.get("label", "")),
+            value=str(item.get("value", "")),
+        )
+        for item in (request.answers or [])
+        if isinstance(item, dict)
+    ]
+    return RequestOut(
+        **request_list_item(request).model_dump(),
+        answers=answers,
+        admin_note=request.admin_note,
     )

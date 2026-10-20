@@ -1,5 +1,6 @@
 import type {
   Currency,
+  OrderStatus,
   LicenseStatus,
   MemberStatus,
   NotificationStatus,
@@ -120,3 +121,21 @@ export function paymentLabel(status: PaymentStatus, isOverdue: boolean): LabelSp
   }
   return PAYMENT_STATUS[status] ?? { label: status, tone: "neutral" };
 }
+
+
+export const ORDER_STATUS: Record<OrderStatus, LabelSpec> = {
+  new: { label: "جدید", tone: "accent" },
+  contacted: { label: "تماس گرفته شد", tone: "info" },
+  quoted: { label: "پیشنهاد ارسال شد", tone: "warning" },
+  won: { label: "تبدیل به مشتری", tone: "success" },
+  lost: { label: "منصرف شد", tone: "danger" },
+  cancelled: { label: "لغو شده", tone: "neutral" },
+};
+
+export const QUESTION_TYPES: Record<string, string> = {
+  text: "متن کوتاه",
+  long_text: "متن بلند",
+  number: "عدد",
+  choice: "انتخابی",
+  phone: "شماره تماس",
+};

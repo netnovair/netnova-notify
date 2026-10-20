@@ -14,6 +14,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import setup_logging
 from app.db.session import SessionLocal
 from app.services.auth import AuthService
+from app.services.telegram_bot import BOT_COMMANDS
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -36,6 +37,14 @@ async def lifespan(_: FastAPI):
             )
     finally:
         db.close()
+    if settings.telegram_mode == "http":
+        # Idempotent and cheap; keeps /start, /menu, /cancel and /help discoverable.
+        try:
+            from app.adapters.telegram.factory import get_telegram_adapter
+
+            get_telegram_adapter().set_my_commands(BOT_COMMANDS)
+        except Exception:  # noqa: BLE001 - never block startup on Telegram
+            logger.warning("Could not register Telegram bot commands at startup.")
     yield
 
 

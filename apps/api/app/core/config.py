@@ -9,7 +9,24 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+
+def resolve_repo_root(module_path: Path) -> Path:
+    """Locate the repository root for the optional development ``.env`` file.
+
+    In the source checkout this file lives at ``<repo>/apps/api/app/core/config.py``,
+    so the repository root is four levels up. The Docker image copies ``apps/api``
+    to ``/app``, where the same file is ``/app/app/core/config.py`` and has only
+    four parents - indexing ``parents[4]`` there raised ``IndexError`` and crashed
+    the process at import time. Fall back to the topmost parent instead; the file
+    is only a convenience path and pydantic tolerates a missing ``.env``.
+    """
+    parents = module_path.resolve().parents
+    if len(parents) > 4:
+        return parents[4]
+    return parents[-1]
+
+
+REPO_ROOT = resolve_repo_root(Path(__file__))
 
 
 class Settings(BaseSettings):

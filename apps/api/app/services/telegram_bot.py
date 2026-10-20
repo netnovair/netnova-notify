@@ -19,7 +19,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters.telegram.base import TelegramAdapter, TelegramError
-from app.adapters.telegram.formatting import html_escape, inline_keyboard, truncate
+from app.adapters.telegram.formatting import (
+    html_escape,
+    inline_keyboard,
+    reply_keyboard,
+    truncate,
+)
 from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.rate_limit import rate_limiter
@@ -40,15 +45,25 @@ from app.repositories.licenses import MemberRepository
 from app.repositories.notifications import NotificationRepository
 from app.repositories.payments import PaymentRepository
 from app.repositories.users import TelegramUserRepository
+from app.services.catalog import CatalogService
 from app.services.licenses import LicenseService
+from app.services.order_flow import (
+    HELP_BUTTON,
+    MENU_BUTTON,
+    ORDER_BUTTON,
+    OrderFlow,
+)
 from app.services.tickets import TicketService, actor_for_employer
 
 logger = logging.getLogger(__name__)
 
 WELCOME = (
-    "به ربات اطلاع رسانی <b>نت نووا</b> خوش آمدید.\n\n"
-    "این ربات برای ارسال اطلاعیه ها و وضعیت مالی پروژه های شماست.\n"
-    "برای اتصال، کد لایسنس پروژه را که مدیر در اختیار شما قرار داده ارسال کنید.\n"
+    "به ربات <b>نت نووا</b> خوش آمدید.\n\n"
+    "از اینجا می توانید اطلاعیه ها و وضعیت پروژه های خود را ببینید یا برای "
+    "خدمات گرافیک، سایت، اپلیکیشن، تولید محتوا و سئو سفارش ثبت کنید.\n\n"
+    "برای ثبت سفارش روی دکمه «ثبت سفارش» بزنید تا در چند سوال کوتاه، نیاز شما را "
+    "دقیق تر بشناسیم.\n"
+    "اگر کد لایسنس پروژه را دارید، آن را به صورت یک پیام ارسال کنید.\n"
     "نمونه کد: <code>NN-XXXX-XXXX-XXXX-XXXX</code>"
 )
 
@@ -57,12 +72,23 @@ HELP = (
     "دستورها:\n"
     "/start شروع و نمایش منو\n"
     "/menu نمایش منوی پروژه\n"
+    "/cancel لغو سفارش یا عملیات جاری\n"
     "/help همین راهنما\n\n"
+    "برای ثبت سفارش از دکمه «ثبت سفارش» استفاده کنید؛ فقط نام، شماره تماس و "
+    "چند سوال کوتاه درباره نیاز شما پرسیده می شود.\n"
     "برای اتصال پروژه، کد لایسنس را به صورت یک پیام ارسال کنید.\n"
     "برای دیدن اطلاعیه ها و وضعیت مالی از دکمه های منو استفاده کنید."
 )
 
 SOON_TEMPLATE = "قابلیت «{label}» به زودی فعال می شود."
+
+#: Registered with Telegram so the command list is visible in the client.
+BOT_COMMANDS = [
+    {"command": "start", "description": "شروع و نمایش منو"},
+    {"command": "menu", "description": "منوی پروژه ها"},
+    {"command": "cancel", "description": "لغو سفارش یا عملیات جاری"},
+    {"command": "help", "description": "راهنما"},
+]
 
 CONVERSATION_TTL_MINUTES = 30
 
@@ -96,27 +122,49 @@ class TelegramBotService:
         if not text:
             return
 
+        # Persistent reply-keyboard buttons arrive as ordinary text messages.
+        if text == ORDER_BUTTON:
+            self._start_order(user, chat_id)
+            return
+        if text == MENU_BUTTON:
+            self._cancel_flows(user)
+            self._ensure_menu_keyboard(user, chat_id)
+            self._send_home(user, chat_id)
+            return
+        if text == HELP_BUTTON:
+            self._send_help(chat_id)
+            return
+
         if text.startswith("/start"):
+            self._cancel_flows(user)
+            self._ensure_menu_keyboard(user, chat_id)
             self._send_home(user, chat_id)
             return
         if text.startswith("/menu"):
+            self._ensure_menu_keyboard(user, chat_id)
             self._send_home(user, chat_id)
             return
         if text.startswith("/help"):
-            self._safe_send(chat_id, HELP, inline_keyboard([[("نمایش منو", "h")]]))
+            self._send_help(chat_id)
             return
-        if text.startswith("/"):
-            self._safe_send(chat_id, "دستور شناخته نشد.\n\n" + HELP)
+        if text.startswith("/cancel"):
+            self._cancel_command(user, chat_id)
             return
 
-        if self._handle_conversation(user, chat_id, text):
-            return
         if self._looks_like_license(text):
+            self._cancel_flows(user)
             self._handle_license_submission(user, chat_id, text)
+            return
+        if self._order_flow(user, chat_id).handle_text(text):
+            return
+        if self._handle_conversation(user, chat_id, text):
             return
         self._safe_send(
             chat_id,
-            "برای اتصال پروژه، کد لایسنس را ارسال کنید.\nبرای مشاهده منو از /start استفاده کنید.",
+            "برای ثبت سفارش از دکمه «ثبت سفارش» استفاده کنید، "
+            "یا برای اتصال پروژه کد لایسنس را ارسال کنید.\n"
+            "برای مشاهده منو /start را بزنید.",
+            inline_keyboard([[("ثبت سفارش", "o:home"), ("راهنما", "help")]]),
         )
 
     # ------------------------------------------------------------------
@@ -212,8 +260,13 @@ class TelegramBotService:
             self._send_home(user, chat_id)
             return True
         if data == "help":
-            self._safe_send(chat_id, HELP, inline_keyboard([[("نمایش منو", "h")]]))
+            self._send_help(chat_id)
             return True
+        if data == "pf":
+            self._send_portfolio(chat_id)
+            return True
+        if data.startswith(("o:", "oc:", "oi:", "op:", "opf:", "oq:", "oskip", "osubmit", "ox")):
+            return self._order_flow(user, chat_id).handle_callback(data)
         if data.startswith("p:") and data[2:].isdigit():
             index = int(data[2:])
             if 0 <= index < len(memberships):
@@ -312,11 +365,22 @@ class TelegramBotService:
             names = "، ".join(html_escape(member.project.name) for member in pending)
             self._safe_send(
                 chat_id,
-                f"درخواست اتصال شما به پروژه <b>{names}</b> ثبت شده و در انتظار تایید مدیر است.",
+                f"درخواست اتصال شما به پروژه <b>{names}</b> ثبت شده و در انتظار تایید مدیر است.\n\n"
+                "تا آن زمان می توانید از دکمه «ثبت سفارش» برای سفارش خدمات جدید استفاده کنید.",
+                inline_keyboard([[("ثبت سفارش", "o:home"), ("نمونه کارها", "pf")]]),
             )
             return
 
-        self._safe_send(chat_id, WELCOME, inline_keyboard([[("راهنما", "help")]]))
+        self._safe_send(
+            chat_id,
+            WELCOME,
+            inline_keyboard(
+                [
+                    [("ثبت سفارش", "o:home")],
+                    [("نمونه کارها", "pf"), ("راهنما", "help")],
+                ]
+            ),
+        )
 
     def _send_project_menu(
         self,
@@ -494,6 +558,8 @@ class TelegramBotService:
         )
 
     def _start_ticket_flow(self, user: TelegramUser, member: ProjectMember, chat_id: int) -> None:
+        # One active flow per user keeps text messages unambiguous.
+        self._order_flow(user, chat_id).cancel()
         self._set_conversation(user, member, step="ticket_subject", payload={})
         self._safe_send(
             chat_id,
@@ -670,6 +736,95 @@ class TelegramBotService:
         return next(
             (position for position, item in enumerate(memberships) if item.id == member.id), 0
         )
+
+    # ------------------------------------------------------------------
+    # Order intake and quick menu
+    # ------------------------------------------------------------------
+    def _order_flow(self, user: TelegramUser, chat_id: int = 0) -> OrderFlow:
+        return OrderFlow(self.db, self.adapter, self.settings, user, chat_id)
+
+    def _start_order(self, user: TelegramUser, chat_id: int) -> None:
+        conversation = self._get_conversation(user)
+        if conversation is not None:
+            self._clear_conversation(conversation)
+        self._order_flow(user, chat_id).start()
+
+    def _cancel_flows(self, user: TelegramUser) -> None:
+        """Drop any half-finished flow so the next text message is unambiguous."""
+        self._order_flow(user).cancel()
+        conversation = self._get_conversation(user)
+        if conversation is not None:
+            self._clear_conversation(conversation)
+
+    def _cancel_command(self, user: TelegramUser, chat_id: int) -> None:
+        flow = self._order_flow(user, chat_id)
+        if flow.has_session():
+            flow.cancel()
+            self._safe_send(
+                chat_id,
+                "ثبت سفارش لغو شد. هر زمان خواستید از دکمه «ثبت سفارش» دوباره شروع کنید.",
+                inline_keyboard([[("منوی اصلی", "h")]]),
+            )
+            return
+        conversation = self._get_conversation(user)
+        if conversation is not None:
+            self._clear_conversation(conversation)
+            self._safe_send(chat_id, "عملیات جاری لغو شد.", inline_keyboard([[("منوی اصلی", "h")]]))
+            return
+        self._safe_send(
+            chat_id,
+            "عملیات در حال انجامی وجود ندارد.",
+            inline_keyboard([[("منوی اصلی", "h")]]),
+        )
+
+    def _send_help(self, chat_id: int) -> None:
+        self._safe_send(
+            chat_id,
+            HELP,
+            inline_keyboard([[("ثبت سفارش", "o:home")], [("نمایش منو", "h")]]),
+        )
+
+    def _send_portfolio(self, chat_id: int) -> None:
+        """Portfolio index. Texts are edited from the panel, never hard-coded."""
+        categories = CatalogService.public_tree(self.db)
+        rows: list[list[tuple[str, str]]] = [
+            [((f"{category.emoji} {category.title}").strip(), f"op:{index}")]
+            for index, category in enumerate(categories)
+            if category.show_portfolio
+        ]
+        if not rows:
+            self._safe_send(
+                chat_id,
+                "در حال حاضر نمونه کار منتشر شده ای برای نمایش وجود ندارد.\n"
+                "با ثبت سفارش، نمونه کارهای مرتبط با نیاز شما برایتان ارسال می شود.",
+                inline_keyboard([[("ثبت سفارش", "o:home")], [("منوی اصلی", "h")]]),
+            )
+            return
+        self._safe_send(
+            chat_id,
+            "<b>نمونه کارها</b>\n\nدسته مورد نظر را انتخاب کنید تا نمونه کارهای آن را ببینید.\n"
+            "<i>محتوای هر دسته از پنل مدیریت قابل ویرایش است.</i>",
+            inline_keyboard(rows + [[("ثبت سفارش", "o:home")]]),
+        )
+
+    def _ensure_menu_keyboard(
+        self, user: TelegramUser, chat_id: int, *, force: bool = False
+    ) -> None:
+        """Send the persistent reply keyboard once (it then stays on screen)."""
+        now = utcnow()
+        last = user.menu_keyboard_sent_at
+        if not force and last is not None and (now - last) < timedelta(days=30):
+            return
+        self._safe_send(
+            chat_id,
+            "برای دسترسی سریع، از دکمه های پایین صفحه استفاده کنید.",
+            reply_keyboard(
+                [[ORDER_BUTTON], [MENU_BUTTON, HELP_BUTTON]],
+                placeholder="یکی از گزینه ها را انتخاب کنید",
+            ),
+        )
+        user.menu_keyboard_sent_at = now
+        self.db.flush()
 
     # ------------------------------------------------------------------
     # Helpers

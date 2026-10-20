@@ -4,6 +4,7 @@ from app.api.v1 import (
     admins,
     audit,
     auth,
+    catalog,
     channels,
     dashboard,
     diagnostics,
@@ -11,6 +12,7 @@ from app.api.v1 import (
     licenses,
     members,
     notifications,
+    orders,
     payments,
     projects,
     telegram,
@@ -31,6 +33,8 @@ api_router.include_router(telegram.router)
 api_router.include_router(tickets.router)
 api_router.include_router(admins.router)
 api_router.include_router(channels.router)
+api_router.include_router(catalog.router)
+api_router.include_router(orders.router)
 
 from app.core.config import get_settings  # noqa: E402
 

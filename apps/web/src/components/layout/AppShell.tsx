@@ -3,11 +3,13 @@
 import clsx from "clsx";
 import {
   BellRing,
+  ClipboardList,
   FolderKanban,
-  MessagesSquare,
   Home,
   KeyRound,
+  Layers,
   LogOut,
+  MessagesSquare,
   Settings,
   Wallet,
   WifiOff,
@@ -23,6 +25,8 @@ import { useOnlineStatus } from "@/lib/hooks";
 const NAV = [
   { href: "/", label: "خانه", icon: Home, short: "خانه" },
   { href: "/projects", label: "پروژه ها", icon: FolderKanban, short: "پروژه ها" },
+  { href: "/orders", label: "سفارش ها", icon: ClipboardList, short: "سفارش" },
+  { href: "/services", label: "خدمات", icon: Layers, short: "خدمات" },
   { href: "/licenses", label: "لایسنس ها", icon: KeyRound, short: "لایسنس" },
   { href: "/notifications", label: "تاریخچه ارسال", icon: BellRing, short: "اطلاعیه" },
   { href: "/payments", label: "پرداخت ها", icon: Wallet, short: "پرداخت" },
@@ -206,7 +210,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
       >
         <ul className="mx-auto flex max-w-lg items-stretch justify-between px-1">
-          {NAV.filter((item) => item.href !== "/licenses").map((item) => {
+          {NAV.filter((item) => !["/licenses", "/services"].includes(item.href)).map((item) => {
             const Icon = item.icon;
             const active = isActive(pathname, item.href);
             return (
