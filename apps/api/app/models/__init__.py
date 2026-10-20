@@ -1,5 +1,12 @@
 """Import every model so SQLAlchemy metadata and Alembic see the full schema."""
 
+from app.models.accounting import (
+    MessageTemplate,
+    PaymentAllocation,
+    PaymentMethod,
+    PaymentReceipt,
+    PaymentReceiptFile,
+)
 from app.models.admin import AdminSession, AdminUser
 from app.models.audit import AuditLog
 from app.models.catalog import (
@@ -25,6 +32,11 @@ from app.models.ticket import (
 
 __all__ = [
     "AdminSession",
+    "MessageTemplate",
+    "PaymentAllocation",
+    "PaymentMethod",
+    "PaymentReceipt",
+    "PaymentReceiptFile",
     "AdminUser",
     "AuditLog",
     "ScheduledJob",

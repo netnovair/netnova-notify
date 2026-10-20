@@ -229,8 +229,25 @@ confirmed, that login errors are displayed, and that status labels render correc
 - The bot secret protects the webhook, but Telegram itself is the trust anchor for
   sender identity. A leaked bot token allows impersonation of the bot — rotate and
   re-register immediately.
-- License codes are bearer secrets during delivery. Send them over a secure channel and
-  revoke if they may have leaked.
+- License codes are bearer secrets during delivery. New codes are stored twice: a
+  keyed hash for lookup and an AES-GCM ciphertext (`LICENSE_ENCRYPTION_KEY`, intentionally
+  separate from `SECRET_KEY`). Losing the encryption key makes codes unreadable but does
+  not invalidate them; rotate by reissuing. Legacy hash-only rows have no ciphertext and
+  must be reissued before they can be shown. Revealing a code is audited and limited to
+  10 requests per minute per administrator.
+- The AI advisor receives only the employer's question and a short project context
+  (name, status, description). It never receives amounts, license codes, Telegram ids or
+  the database. Without a configured key the feature answers «به زودی»; no answer is
+  fabricated and provider errors never leak into the chat. A provider outage or timeout
+  is reported as `409 advisor_unavailable`, never as a 500 with internals.
+- The advisor API key is sent in the `x-goog-api-key` header, not in the query string,
+  so it cannot land in a proxy or access log.
+- Rich text is sanitized twice (on save and on render) against Telegram's own tag list;
+  text that is cut for length never leaves a tag half-open, because Telegram would reject
+  the whole message. The panel renders it with a React parser, never
+  `dangerouslySetInnerHTML`.
+- Admin-authored rich text in a ticket reply is stored as markup but the employer side
+  only receives Telegram's allow-listed subset; employer text is always escaped.
 - Audit logs are append-only through the API but not cryptographically signed; a
   database administrator can alter them.
 - Session fixation is mitigated by creating a new token at login and deleting the old

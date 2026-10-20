@@ -9,6 +9,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-please-change-0123456789")
+os.environ.setdefault("LICENSE_ENCRYPTION_KEY", "test-license-encryption-key-0123456789abcdef")
 os.environ.setdefault("TELEGRAM_ADAPTER", "mock")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "")
 os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-webhook-secret")

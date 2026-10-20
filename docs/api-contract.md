@@ -462,3 +462,58 @@ Context never contains raw license codes, session tokens, CSRF tokens or bot tok
 API responses carry `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
 `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive
 `Permissions-Policy` and `X-Robots-Tag: noindex, nofollow`.
+
+## 7. حسابداری
+
+همه مسیرها نیازمند نشست مدیر هستند (`/api/v1/accounting`).
+
+| مسیر | کار |
+| --- | --- |
+| `GET /overview` | جمع بدهی/پرداخت/اعتبار/مانده هر ارز + سطر هر پروژه |
+| `GET /projects/{id}/totals` | همان محاسبه برای یک پروژه |
+| `GET /receipts?project_id&status&limit` | فهرست رسیدها |
+| `GET /receipts/{id}` | جزئیات رسید (فایل ها، تخصیص ها) |
+| `POST /projects/{id}/receipts` | ثبت رسید توسط مدیر (نقدی/کارتخوان) |
+| `POST /receipts/{id}/files` | افزودن تصویر (multipart، حداکثر ۵ مگابایت) |
+| `GET /receipt-files/{id}` | تصویر رسید، `inline` و `no-store` |
+| `POST /receipts/{id}/approve` | تایید؛ بدون `allocations` تخصیص خودکار قدیمی ترین اول |
+| `POST /receipts/{id}/reject` | رد با دلیل (حداقل ۳ کاراکتر) |
+| `PATCH /receipts/{id}/allocations` | ویرایش تخصیص پس از تایید |
+| `GET /receipts/{id}/summary` | خلاصه کوتاه |
+| `GET/POST /payment-methods`, `PATCH/DELETE /payment-methods/{id}` | شماره کارت عمومی/پروژه |
+| `GET /templates`, `PUT/DELETE /templates/{key}` | متن های آماده (پروژه → عمومی → پیش فرض) |
+
+خطاهای قابل انتظار: `409 receipt_already_reviewed`، `409 nothing_to_allocate`،
+`400 allocation_over_receipt`، `400 allocation_exceeds_invoice`،
+`409 code_unavailable` (برای لایسنس هش-فقط).
+
+## 8. لایسنس: نمایش، صدور مجدد، ارسال
+
+| مسیر | کار |
+| --- | --- |
+| `GET /licenses/{id}/code` | نمایش کد کامل؛ ثبت در Audit و محدودیت ۱۰ بار در دقیقه (`429`) |
+| `POST /licenses/{id}/reissue` | لغو کد قبلی و صدور کد جدید؛ کد خام فقط در همین پاسخ |
+| `POST /licenses/{id}/deliver` | صف ارسال خصوصی کد به تلگرام کارفرما (job: `license_delivery`)؛ لایسنس لغو/منقضی → `409 license_not_active` |
+
+فهرست لایسنس ها همچنان فقط `code_prefix` را برمی گرداند. کد در جدول شغل ها ذخیره
+نمی شود؛ Worker آن را هنگام ارسال رمزگشایی می کند.
+
+## 9. مشاور هوشمند
+
+| مسیر | کار |
+| --- | --- |
+| `GET /advisor/status` | `{available, provider, model, reason}` |
+| `POST /advisor/ask` | پرسش آزاد؛ بدون کلید API پاسخ `409 advisor_unavailable` |
+
+بدون `AI_ADVISOR_API_KEY` ربات برای دکمه مشاور «به زودی» می گوید و پنل ورودی را
+غیرفعال نشان می دهد. هیچ پاسخی ساخته نمی شود.
+
+برای فعال کردن، یک **کلید API از Google AI Studio** لازم است (سطح رایگان هم دارد)؛
+اشتراک Gemini Pro در اپلیکیشن گوگل، کلید API به شما نمی دهد. بعد از گرفتن کلید:
+
+1. `AI_ADVISOR_PROVIDER=gemini` و `AI_ADVISOR_API_KEY=...` را در محیط سرور بگذارید.
+2. سرویس را ری استارت کنید؛ `GET /advisor/status` باید `available: true` برگرداند.
+3. در ربات، دکمه «مشاور هوشمند» از «به زودی» به پرسش و پاسخ کوتاه تغییر می کند.
+
+محدودیت های پاسخ: ۶۰۰ کاراکتر برای پرسش، ۹۰۰ کاراکتر برای پاسخ و ۲۰۰۰ کاراکتر
+زمینه؛ پاسخ ها فقط آموزشی اند و هیچ عدد مالی یا کد لایسنسی تولید نمی کنند.

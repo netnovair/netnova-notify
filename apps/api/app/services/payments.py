@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -128,9 +129,13 @@ class PaymentService:
         now = utcnow()
         if payment.status == PaymentStatus.PAID.value:
             return payment
-        if payment.status != PaymentStatus.UNPAID.value:
+        if payment.status not in (
+            PaymentStatus.UNPAID.value,
+            PaymentStatus.PARTIALLY_PAID.value,
+        ):
             raise conflict("این پرداخت در وضعیت فعلی قابل تسویه نیست.")
         payment.status = PaymentStatus.PAID.value
+        payment.amount_paid_minor = payment.amount_minor
         payment.paid_at = now
         payment.updated_at = now
         JobRepository.cancel(db, payment.reminder_job_id, now)
@@ -150,12 +155,27 @@ class PaymentService:
 
     @staticmethod
     def cancel(db: Session, *, payment: Payment, actor: Actor) -> Payment:
+        from app.models.accounting import PaymentAllocation
+
         now = utcnow()
+        allocated = db.scalar(
+            select(func.count(PaymentAllocation.id)).where(
+                PaymentAllocation.payment_id == payment.id
+            )
+        )
+        if allocated:
+            # Cancelling would orphan an approved receipt allocation; make the
+            # administrator move the money first instead of losing the record.
+            raise conflict(
+                "این فاکتور تخصیص رسید دارد. ابتدا تخصیص رسید را ویرایش یا حذف کنید.",
+                code="payment_has_allocations",
+            )
         if payment.status == PaymentStatus.PAID.value:
             raise conflict("پرداخت تسویه شده قابل لغو نیست.")
         if payment.status == PaymentStatus.CANCELLED.value:
             return payment
         payment.status = PaymentStatus.CANCELLED.value
+        payment.amount_paid_minor = 0
         payment.cancelled_at = now
         payment.updated_at = now
         JobRepository.cancel(db, payment.reminder_job_id, now)
@@ -238,8 +258,11 @@ class PaymentService:
             PaymentService._skip(db, job, None, "پرداخت یافت نشد.", now)
             return
 
-        if payment.status != PaymentStatus.UNPAID.value:
-            PaymentService._skip(db, job, payment, "پرداخت دیگر در وضعیت پرداخت نشده نیست.", now)
+        if payment.status not in (
+            PaymentStatus.UNPAID.value,
+            PaymentStatus.PARTIALLY_PAID.value,
+        ):
+            PaymentService._skip(db, job, payment, "پرداخت دیگری در وضعیت باز نیست.", now)
             return
 
         if job.payload.get("due_at") and job.payload["due_at"] != payment.due_at.isoformat():
@@ -273,7 +296,7 @@ class PaymentService:
         if notification is None:
             from app.models.notification import Notification
 
-            body = PaymentService._reminder_body(payment)
+            body = PaymentService._reminder_body(db, payment, project)
             notification = Notification(
                 project_id=project.id,
                 type=NotificationType.FINANCIAL.value,
@@ -308,14 +331,28 @@ class PaymentService:
             db.flush()
 
     @staticmethod
-    def _reminder_body(payment: Payment) -> str:
+    def _reminder_body(db: Session, payment: Payment, project: Project) -> str:
+        """Render the editable ``payment_reminder`` template (project > global > default)."""
+        from app.domain.accounting import invoice_remaining
+        from app.services.accounting import TemplateService
+
         settings = get_settings()
+        remaining = invoice_remaining(payment.amount_minor, payment.amount_paid_minor)
+        text = TemplateService.render(
+            db,
+            "payment_reminder",
+            project_id=payment.project_id,
+            values={
+                "project": project.name,
+                "name": project.client_name or "",
+                "amount": format_amount(payment.amount_minor, payment.currency),
+                "due": format_jalali_date(payment.due_at, settings.tehran_timezone),
+                "remaining": format_amount(remaining, payment.currency),
+            },
+        )
         notes = f"\nتوضیحات: {payment.notes}" if payment.notes else ""
         return (
-            f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}\n"
-            f"سررسید: {format_jalali_date(payment.due_at, settings.tehran_timezone)}\n"
-            "وضعیت: پرداخت نشده"
-            f"{notes}\n\n"
+            f"{text}{notes}\n\n"
             "این پیام فقط برای اطلاع رسانی وضعیت مالی است و به معنای تایید تراکنش بانکی نیست."
         )
 

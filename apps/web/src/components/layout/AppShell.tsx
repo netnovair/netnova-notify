@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   Settings,
   Wallet,
+  Landmark,
   WifiOff,
 } from "lucide-react";
 import Link from "next/link";
@@ -30,6 +31,7 @@ const NAV = [
   { href: "/licenses", label: "لایسنس ها", icon: KeyRound, short: "لایسنس" },
   { href: "/notifications", label: "تاریخچه ارسال", icon: BellRing, short: "اطلاعیه" },
   { href: "/payments", label: "پرداخت ها", icon: Wallet, short: "پرداخت" },
+  { href: "/accounting", label: "حسابداری", icon: Landmark, short: "حساب" },
   { href: "/tickets", label: "پشتیبانی", icon: MessagesSquare, short: "پشتیبانی" },
   { href: "/settings", label: "تنظیمات", icon: Settings, short: "تنظیمات" },
 ];

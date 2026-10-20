@@ -36,3 +36,24 @@ class LicenseCreate(BaseModel):
 
 class LicenseRevoke(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+
+
+class LicenseCodeOut(BaseModel):
+    """The revealed code; never sent in list responses."""
+
+    id: uuid.UUID
+    code: str
+    code_prefix: str
+
+
+class LicenseReissue(BaseModel):
+    expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def _aware(cls, value: datetime | None) -> datetime | None:
+        return ensure_timezone(value)
+
+
+class LicenseDeliver(BaseModel):
+    member_id: uuid.UUID | None = None

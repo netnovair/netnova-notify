@@ -57,6 +57,8 @@ class _BotProtocol(Protocol):
 
     def send_tickets(self, chat_id: int, member: ProjectMember, index: int) -> None: ...
 
+    def send_advisor(self, chat_id: int, member: ProjectMember, index: int) -> None: ...
+
 
 @dataclass
 class FeatureContext:

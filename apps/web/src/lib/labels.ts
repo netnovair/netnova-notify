@@ -51,8 +51,18 @@ export const DELIVERY_STATUS: Record<string, LabelSpec> = {
 
 export const PAYMENT_STATUS: Record<PaymentStatus, LabelSpec> = {
   unpaid: { label: "پرداخت نشده", tone: "warning" },
+  partially_paid: { label: "پرداخت جزئی", tone: "info" },
   paid: { label: "تسویه شده", tone: "success" },
   cancelled: { label: "لغو شده", tone: "neutral" },
+};
+
+export const RECEIPT_STATUS: Record<
+  "pending" | "approved" | "rejected",
+  LabelSpec
+> = {
+  pending: { label: "در انتظار بررسی", tone: "warning" },
+  approved: { label: "تایید شده", tone: "success" },
+  rejected: { label: "رد شده", tone: "danger" },
 };
 
 export const NOTIFICATION_TYPE: Record<NotificationType, string> = {

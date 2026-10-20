@@ -22,7 +22,13 @@ class Payment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "payments"
     __table_args__ = (
         CheckConstraint("amount_minor > 0", name="amount_positive"),
-        CheckConstraint("status IN ('unpaid', 'paid', 'cancelled')", name="status_valid"),
+        CheckConstraint(
+            "status IN ('unpaid', 'partially_paid', 'paid', 'cancelled')", name="status_valid"
+        ),
+        CheckConstraint(
+            "amount_paid_minor >= 0 AND amount_paid_minor <= amount_minor",
+            name="paid_amount_valid",
+        ),
         CheckConstraint("currency IN ('IRR', 'IRT', 'USD', 'EUR')", name="currency_valid"),
         Index("ix_payments_project_due", "project_id", "due_at"),
         Index("ix_payments_status_due", "status", "due_at"),
@@ -33,6 +39,11 @@ class Payment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: Sum of approved allocations. Kept denormalised so list queries stay cheap;
+    #: always recomputed from ``payment_allocations`` inside one transaction.
+    amount_paid_minor: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
     currency: Mapped[str] = mapped_column(String(3), default="IRR", nullable=False)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="unpaid", nullable=False)

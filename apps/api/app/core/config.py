@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
     secret_key: str = "development-only-secret-change-me"
+    #: Separate key for encrypting license codes at rest (never SECRET_KEY).
+    #: Empty means new codes are stored hash-only and cannot be shown later.
+    license_encryption_key: str = ""
     database_url: str = "postgresql+psycopg://netnova:netnova@localhost:5432/netnova"
 
     session_ttl_hours: int = Field(default=12, ge=1, le=24 * 30)
@@ -76,6 +79,13 @@ class Settings(BaseSettings):
     worker_stale_seconds: int = Field(default=300, ge=30)
     job_max_attempts: int = Field(default=4, ge=1, le=20)
     job_backoff_base_seconds: int = Field(default=30, ge=1)
+
+    #: Employer-facing AI advisor. Empty key = feature stays off ("به زودی");
+    #: the panel shows the disabled state instead of pretending it works.
+    ai_advisor_provider: Literal["none", "gemini"] = "none"
+    ai_advisor_api_key: str = ""
+    ai_advisor_model: str = "gemini-2.0-flash"
+    ai_advisor_timeout_seconds: float = Field(default=20.0, gt=0, le=60)
 
     tehran_timezone: str = "Asia/Tehran"
     payment_reminder_days_before: int = Field(default=3, ge=0, le=90)

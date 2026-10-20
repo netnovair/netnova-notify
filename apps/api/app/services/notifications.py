@@ -14,7 +14,7 @@ from app.adapters.messaging.base import (
 )
 from app.adapters.messaging.registry import CHANNEL_KEYS, get_channel_adapter
 from app.adapters.telegram.base import TelegramAdapter
-from app.adapters.telegram.formatting import html_escape, truncate
+from app.adapters.telegram.formatting import html_escape
 from app.core.config import get_settings
 from app.core.errors import conflict, not_found
 from app.core.security import utcnow
@@ -26,6 +26,7 @@ from app.domain.enums import (
     NotificationType,
 )
 from app.domain.notification_rules import can_cancel, can_retry
+from app.domain.telegram_html import sanitize_telegram_html, truncate_html
 from app.models.notification import DeliveryAttempt, Notification
 from app.models.project import Project
 from app.models.telegram import ProjectMember
@@ -60,10 +61,12 @@ class NotificationService:
             f"<b>{html_escape(project.name)}</b>\n"
             f"<i>{type_label}</i>\n\n"
             f"<b>{html_escape(notification.title)}</b>\n"
-            f"{html_escape(notification.body)}\n\n"
+            f"{sanitize_telegram_html(notification.body)}\n\n"
             f"<i>NetNova Notify</i>"
         )
-        return truncate(text)
+        # The body may contain Telegram markup, so a plain slice could cut a tag
+        # in half and make Telegram reject the whole message.
+        return truncate_html(text)
 
     @staticmethod
     def create(
@@ -94,7 +97,9 @@ class NotificationService:
             project_id=project.id,
             type=payload.type.value,
             title=payload.title,
-            body=payload.body,
+            # Rich text is sanitized once, on write, so every send path (retry,
+            # worker, re-send) renders exactly the same safe markup.
+            body=sanitize_telegram_html(payload.body, limit=4000),
             status=NotificationStatus.QUEUED.value,
             scheduled_at=scheduled_at,
             queued_at=now,
@@ -245,6 +250,25 @@ class NotificationService:
     # Delivery (called by the worker)
     # ------------------------------------------------------------------
     @staticmethod
+    def action_keyboard(notification_type: str, index: int | None) -> dict | None:
+        """Shortcut buttons so a pushed message leads straight to the right section."""
+        from app.adapters.telegram.formatting import inline_keyboard
+
+        if index is None:
+            return inline_keyboard([[("راهنما", "help")]])
+        if notification_type == "financial":
+            rows = [[("ارسال رسید", f"{index}:rnew")]]
+            rows.append([("وضعیت مالی", f"{index}:fin")])
+            return inline_keyboard(rows)
+        if notification_type == "announcement":
+            rows = [
+                [("مشاهده اطلاعیه ها", f"{index}:ann")],
+                [("منوی پروژه", f"{index}:home")],
+            ]
+            return inline_keyboard(rows)
+        return inline_keyboard([[("منوی اصلی", f"{index}:home")]])
+
+    @staticmethod
     def _channel_targets(
         db: Session,
         *,
@@ -382,6 +406,16 @@ class NotificationService:
             return notification.status
 
         text = NotificationService.format_message(notification, project)
+        index_by_chat: dict[int, int] = {}
+        for member in recipients:
+            if member.telegram_user is None:
+                continue
+            positions = LicenseService.access_memberships(db, member.telegram_user)
+            position = next(
+                (number for number, item in enumerate(positions) if item.id == member.id), None
+            )
+            if position is not None:
+                index_by_chat[int(member.telegram_user.telegram_id)] = position
         already_sent = {
             (delivery.channel, delivery.recipient)
             for delivery in notification.deliveries
@@ -432,7 +466,12 @@ class NotificationService:
                 if not channel_adapter.configured:
                     raise PermanentChannelError(f"کانال {channel} در سرور پیکربندی نشده است.")
                 if channel in HTML_CHANNELS:
-                    result = channel_adapter.send(recipient, text)
+                    keyboard = None
+                    if channel == "telegram" and chat_id is not None:
+                        keyboard = NotificationService.action_keyboard(
+                            notification.type, index_by_chat.get(chat_id)
+                        )
+                    result = channel_adapter.send(recipient, text, keyboard)
                 else:
                     from app.adapters.messaging.providers import plain_text
 

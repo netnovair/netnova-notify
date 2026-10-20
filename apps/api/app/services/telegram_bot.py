@@ -23,7 +23,6 @@ from app.adapters.telegram.formatting import (
     html_escape,
     inline_keyboard,
     reply_keyboard,
-    truncate,
 )
 from app.core.config import Settings
 from app.core.errors import ApiError
@@ -42,14 +41,15 @@ from app.domain.menu import (
     soon_key_for_callback,
 )
 from app.domain.payments import format_amount, is_overdue
+from app.domain.telegram_html import sanitize_telegram_html, truncate_html
 from app.features import FeatureContext, find_by_action, get_feature, handler_for
 from app.models.payment import Payment
 from app.models.system import SystemState
 from app.models.telegram import ProjectMember, TelegramUser
 from app.repositories.licenses import MemberRepository
 from app.repositories.notifications import NotificationRepository
-from app.repositories.payments import PaymentRepository
 from app.repositories.users import TelegramUserRepository
+from app.services.accounting import AccountingService
 from app.services.catalog import CatalogService
 from app.services.licenses import LicenseService
 from app.services.order_flow import (
@@ -95,6 +95,7 @@ BOT_COMMANDS = [
     {"command": "help", "description": "راهنما"},
 ]
 
+STEP_ADVISOR = "advisor_question"
 CONVERSATION_TTL_MINUTES = 30
 
 
@@ -209,7 +210,8 @@ class TelegramBotService:
             self._safe_send(
                 chat_id,
                 "برای ارسال تصویر، ابتدا از منوی «تیکت ها» یک تیکت باز کنید یا پاسخ "
-                "همان تیکت را بزنید؛ سپس تصویر را همراه متن یا به تنهایی بفرستید.",
+                "همان تیکت را بزنید، یا در بخش «وضعیت مالی» گزینه «ارسال رسید» را انتخاب "
+                "کنید؛ سپس تصویر را همراه متن یا به تنهایی بفرستید.",
                 inline_keyboard([[("منوی اصلی", "h")]]),
             )
 
@@ -316,6 +318,16 @@ class TelegramBotService:
         memberships: list[ProjectMember],
         data: str,
     ) -> bool:
+        if data == "cancel":
+            conversation = self._get_conversation(user)
+            if conversation is not None:
+                self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                "عملیات لغو شد. هر زمان خواستید از منو دوباره شروع کنید.",
+                inline_keyboard([[("منوی اصلی", "h")]]),
+            )
+            return True
         if data == "h":
             self._send_home(user, chat_id)
             return True
@@ -357,8 +369,40 @@ class TelegramBotService:
             return True
         member = memberships[index]
 
+        if len(parts) == 2 and parts[1] == "cancel":
+            conversation = self._get_conversation(user)
+            if conversation is not None:
+                self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                "عملیات لغو شد.",
+                inline_keyboard(
+                    [[("وضعیت مالی", f"{index}:fin")], [("منوی اصلی", f"{index}:home")]]
+                ),
+            )
+            return True
         if len(parts) == 2 and parts[1] == "home":
             self._send_home(user, chat_id)
+            return True
+        if len(parts) == 2 and parts[1] == "rnew":
+            from app.services.receipt_flow import ReceiptFlow
+
+            ReceiptFlow(
+                self.db, self.adapter, self.settings, user, chat_id, member, index, self
+            ).start()
+            return True
+        if len(parts) == 2 and parts[1] == "rhist":
+            from app.services.receipt_flow import ReceiptFlow
+
+            ReceiptFlow(
+                self.db, self.adapter, self.settings, user, chat_id, member, index, self
+            ).show_history()
+            return True
+        if len(parts) == 2 and parts[1] == "rinv":
+            self._send_invoices(chat_id, member, index)
+            return True
+        if len(parts) == 2 and parts[1] == "rcards":
+            self._send_cards(chat_id, user, member, index)
             return True
         if len(parts) == 2 and parts[1] == "newticket":
             self._start_ticket_flow(user, member, chat_id)
@@ -481,7 +525,7 @@ class TelegramBotService:
         enabled = enabled_features(flags)
         if not enabled:
             text += "\n\nدر حال حاضر قابلیتی برای این پروژه فعال نشده است."
-        self._safe_send(chat_id, truncate(text), project_menu_buttons(index, flags))
+        self._safe_send(chat_id, truncate_html(text), project_menu_buttons(index, flags))
 
     def send_announcements(self, chat_id: int, member: ProjectMember, index: int) -> None:
         self._send_announcements(chat_id, member, index)
@@ -501,47 +545,152 @@ class TelegramBotService:
             parts.append(
                 f"<b>{html_escape(notification.title)}</b>\n"
                 f"<i>{format_jalali_date(sent_at, self.settings.tehran_timezone)}</i>\n"
-                f"{html_escape(notification.body)}"
+                # Announcement bodies may carry Telegram markup; escaping would
+                # show the tags literally, so they are sanitized instead.
+                f"{sanitize_telegram_html(notification.body)}"
             )
         self._safe_send(
             chat_id,
-            truncate("\n\n".join(parts)),
+            truncate_html("\n\n".join(parts)),
             inline_keyboard([[("بازگشت به منو", f"{index}:home")]]),
         )
 
     def send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
         self._send_financial(chat_id, member, index)
 
-    def _send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
-        payments = PaymentRepository.open_payments_for_project(self.db, member.project_id)
+    # ------------------------------------------------------------------
+    # AI advisor (structure only until an API key exists)
+    # ------------------------------------------------------------------
+    def send_advisor(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        from app.services.advisor import AdvisorService
+
         back = inline_keyboard([[("بازگشت به منو", f"{index}:home")]])
-        if not payments:
+        status = AdvisorService.status(self.settings)
+        if not status.available:
+            # Never improvise an answer when the provider is not configured.
             self._safe_send(
                 chat_id,
-                f"برای پروژه <b>{html_escape(member.project.name)}</b> هیچ پرداخت بازی ثبت نشده است.",
+                "قابلیت «مشاور هوشمند» به زودی فعال می شود.\n"
+                "تا آن زمان می توانید سوال خود را از بخش «پشتیبانی و تیکت» بپرسید.",
                 back,
             )
             return
-        now = utcnow()
-        lines = [f"<b>وضعیت مالی {html_escape(member.project.name)}</b>", ""]
-        for payment in payments:
-            lines.append(self._format_payment(payment, now))
-        lines.append("")
-        lines.append(
-            "<i>این اطلاعات فقط جهت اطلاع رسانی است و تایید تراکنش بانکی محسوب نمی شود.</i>"
+        if member.telegram_user is None:
+            self._safe_send(chat_id, "برای استفاده از مشاور، حساب تلگرام شما باید متصل باشد.", back)
+            return
+        self._set_conversation(
+            member.telegram_user,
+            member,
+            step=STEP_ADVISOR,
+            payload={"index": index},
         )
-        self._safe_send(chat_id, truncate("\n\n".join(lines)), back)
+        self._safe_send(
+            chat_id,
+            "سوال خود را کوتاه بنویسید؛ پاسخ حداکثر ۶ خط خواهد بود.\n"
+            "برای انصراف /cancel را بفرستید.",
+            inline_keyboard([[("لغو", "cancel")]]),
+        )
+
+    def _send_financial(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        invoices_exist = bool(AccountingService.invoices(self.db, member.project_id))
+        totals = (
+            AccountingService.project_totals(self.db, member.project_id) if invoices_exist else []
+        )
+        project_name = html_escape(member.project.name)
+        rows: list[list[tuple[str, str]]] = [
+            [("ارسال رسید", f"{index}:rnew")],
+            [("سوابق واریز", f"{index}:rhist"), ("فاکتورها", f"{index}:rinv")],
+            [("شماره کارت ها", f"{index}:rcards")],
+            [("بازگشت به منو", f"{index}:home")],
+        ]
+        if not invoices_exist:
+            self._safe_send(
+                chat_id,
+                f"برای پروژه <b>{project_name}</b> هنوز فاکتوری ثبت نشده است.\n"
+                "اگر مبلغی واریز کرده اید، از دکمه «ارسال رسید» استفاده کنید.",
+                inline_keyboard(rows),
+            )
+            return
+        lines = [f"<b>وضعیت مالی {project_name}</b>", ""]
+        for total in totals:
+            lines.append(f"بدهی: <b>{format_amount(total.debt_minor, total.currency)}</b>")
+            if total.overdue_minor:
+                lines.append(f"سررسید گذشته: {format_amount(total.overdue_minor, total.currency)}")
+            lines.append(f"پرداخت شده: {format_amount(total.paid_minor, total.currency)}")
+            if total.credit_minor:
+                lines.append(f"اعتبار: {format_amount(total.credit_minor, total.currency)}")
+            lines.append(
+                "مانده حساب: "
+                + (
+                    "<b>تسویه</b>"
+                    if total.settled
+                    else f"<b>{format_amount(total.balance_minor, total.currency)}</b>"
+                )
+            )
+            lines.append("")
+        pending = AccountingService.pending_receipts(self.db, member.project_id)
+        if pending:
+            lines.append(f"<i>{pending} رسید در انتظار بررسی دارید.</i>")
+            lines.append("")
+        lines.append(
+            "<i>این اعداد از فاکتورها و رسیدهای تاییدشده محاسبه می شوند؛ "
+            "تایید تراکنش بانکی با پشتیبانی است.</i>"
+        )
+        self._safe_send(chat_id, truncate_html("\n".join(lines)), inline_keyboard(rows))
+
+    def _send_invoices(self, chat_id: int, member: ProjectMember, index: int) -> None:
+        invoices = AccountingService.invoices(self.db, member.project_id)
+        back = inline_keyboard([[("ارسال رسید", f"{index}:rnew")], [("بازگشت", f"{index}:fin")]])
+        if not invoices:
+            self._safe_send(chat_id, "فاکتوری برای این پروژه ثبت نشده است.", back)
+            return
+        now = utcnow()
+        lines = ["<b>فاکتورهای پروژه</b>", ""]
+        for payment in invoices:
+            lines.append(self._format_payment(payment, now))
+        self._safe_send(chat_id, truncate_html("\n\n".join(lines)), back)
+
+    def _send_cards(
+        self, chat_id: int, user: TelegramUser, member: ProjectMember, index: int
+    ) -> None:
+        from app.services.receipt_flow import ReceiptFlow
+
+        flow = ReceiptFlow(self.db, self.adapter, self.settings, user, chat_id, member, index, self)
+        self._safe_send(
+            chat_id,
+            truncate_html(flow.instructions_text()),
+            inline_keyboard(
+                [
+                    [("ارسال رسید", f"{index}:rnew")],
+                    [("بازگشت", f"{index}:fin")],
+                ]
+            ),
+        )
 
     def _format_payment(self, payment: Payment, now: datetime) -> str:
         overdue = is_overdue(payment.status, payment.due_at, now)
         due = format_jalali_date(payment.due_at, self.settings.tehran_timezone)
-        status = "سررسید شده" if overdue else "پرداخت نشده"
-        return (
-            f"<b>{html_escape(payment.title)}</b>\n"
-            f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}\n"
-            f"سررسید: {due}\n"
-            f"وضعیت: {status}"
-        )
+        status = {
+            "unpaid": "پرداخت نشده",
+            "partially_paid": "پرداخت جزئی",
+            "paid": "تسویه شده",
+            "cancelled": "لغو شده",
+        }.get(payment.status, payment.status)
+        if overdue:
+            status = "سررسید شده"
+        remaining = max(0, payment.amount_minor - payment.amount_paid_minor)
+        lines = [
+            f"<b>{html_escape(payment.title)}</b>",
+            f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}",
+        ]
+        if payment.amount_paid_minor:
+            lines.append(
+                f"پرداخت شده: {format_amount(payment.amount_paid_minor, payment.currency)}"
+            )
+        if remaining:
+            lines.append(f"مانده: {format_amount(remaining, payment.currency)}")
+        lines.extend([f"سررسید: {due}", f"وضعیت: {status}"])
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Tickets (two-way support)
@@ -567,7 +716,7 @@ class TelegramBotService:
                     f"آخرین پیام: {html_escape((last.body if last else '')[:120])}"
                 )
                 rows.append([(f"مشاهده تیکت {position}", f"{index}:ticket:{position - 1}")])
-            text = truncate("\n\n".join(parts))
+            text = truncate_html("\n\n".join(parts))
         else:
             text = "هنوز تیکتی برای این پروژه ثبت نکرده اید."
         rows.append([("ثبت تیکت جدید", f"{index}:newticket")])
@@ -598,10 +747,14 @@ class TelegramBotService:
             "",
         ]
         for message in ticket.messages[-6:]:
-            who = "پشتیبانی" if message.author_type == "admin" else "شما"
+            admin_message = message.author_type == "admin"
+            who = "پشتیبانی" if admin_message else "شما"
+            body = (
+                sanitize_telegram_html(message.body) if admin_message else html_escape(message.body)
+            )
             lines.append(
                 f"<b>{who}</b> - <i>{format_jalali_date(message.created_at, self.settings.tehran_timezone)}</i>\n"
-                f"{html_escape(message.body)}"
+                f"{body}"
             )
         if ticket.status == "closed":
             lines.append("")
@@ -610,7 +763,7 @@ class TelegramBotService:
             [("پاسخ به این تیکت", f"{index}:treply:{ordinal}")],
             [("بازگشت به فهرست", f"{index}:tickets")],
         ]
-        self._safe_send(chat_id, truncate("\n\n".join(lines)), inline_keyboard(rows))
+        self._safe_send(chat_id, truncate_html("\n\n".join(lines)), inline_keyboard(rows))
 
     def _start_ticket_reply(
         self, user: TelegramUser, member: ProjectMember, chat_id: int, ordinal: int
@@ -652,6 +805,123 @@ class TelegramBotService:
         conversation = self._get_conversation(user)
         if conversation is None:
             return False
+        from app.services.receipt_flow import STEP_AMOUNT, STEP_CODE, STEP_NOTE, ReceiptFlow
+
+        receipt_steps = (STEP_AMOUNT, STEP_CODE, STEP_NOTE)
+        if conversation.step in receipt_steps:
+            member = next(
+                (
+                    item
+                    for item in LicenseService.access_memberships(self.db, user)
+                    if str(item.id) == str(conversation.payload.get("member_id"))
+                ),
+                None,
+            )
+            if member is None:
+                self._clear_conversation(conversation)
+                self._safe_send(chat_id, "دسترسی شما به این پروژه فعال نیست. لطفا /start را بزنید.")
+                return True
+            if text.startswith("/cancel"):
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "ثبت رسید لغو شد. هر وقت خواستید از بخش «وضعیت مالی» دوباره شروع کنید.",
+                    inline_keyboard([[("منوی اصلی", f"{self._index_of(member)}:home")]]),
+                )
+                return True
+            if text.startswith("/") and text.strip() != "/skip":
+                self._clear_conversation(conversation)
+                return False
+            flow = ReceiptFlow(
+                self.db,
+                self.adapter,
+                self.settings,
+                user,
+                chat_id,
+                member,
+                int(conversation.payload.get("index") or self._index_of(member)),
+                self,
+            )
+            if image is not None:
+                return flow.handle_image(conversation, image, caption=text)
+            return flow.handle_text(conversation, text)
+
+        if conversation.step == STEP_ADVISOR:
+            from app.domain.advisor import AdvisorUnavailable
+            from app.services.advisor import AdvisorService
+
+            if text.startswith("/cancel"):
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "پرسش لغو شد.",
+                    inline_keyboard([[("منوی اصلی", "h")]]),
+                )
+                return True
+            question = text.strip()[:600]
+            if len(question) < 5:
+                self._safe_send(chat_id, "سوال را کمی کامل تر بنویسید (حداقل ۵ کاراکتر).")
+                return True
+            member = next(
+                (
+                    item
+                    for item in LicenseService.access_memberships(self.db, user)
+                    if str(item.id) == str(conversation.payload.get("member_id"))
+                ),
+                None,
+            )
+            index = int((conversation.payload or {}).get("index") or 0)
+            if member is None:
+                self._clear_conversation(conversation)
+                self._safe_send(chat_id, "دسترسی شما به این پروژه فعال نیست. لطفا /start را بزنید.")
+                return True
+            project = member.project
+            context = "\n".join(
+                part
+                for part in (
+                    f"نام پروژه: {project.name}" if project else "",
+                    f"وضعیت پروژه: {project.status}" if project else "",
+                    f"توضیح: {project.description}" if project and project.description else "",
+                )
+                if part
+            )
+            try:
+                answer = AdvisorService.answer(question, context=context)
+            except AdvisorUnavailable:
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "مشاور هوشمند هنوز فعال نشده است. سوال خود را از بخش «پشتیبانی و تیکت» بپرسید.",
+                    inline_keyboard(
+                        [
+                            [("پشتیبانی و تیکت", f"{index}:tickets")],
+                            [("منوی اصلی", f"{index}:home")],
+                        ]
+                    ),
+                )
+                return True
+            except Exception:  # noqa: BLE001 - provider errors never leak to chat
+                logger.exception("Advisor call failed")
+                self._clear_conversation(conversation)
+                self._safe_send(
+                    chat_id,
+                    "در حال حاضر پاسخ به این سوال ممکن نشد. لطفا بعدا تلاش کنید یا از پشتیبانی بپرسید.",
+                    inline_keyboard([[("منوی اصلی", f"{index}:home")]]),
+                )
+                return True
+            self._clear_conversation(conversation)
+            self._safe_send(
+                chat_id,
+                html_escape(answer),
+                inline_keyboard(
+                    [
+                        [("پرسش دیگر", f"{index}:advice")],
+                        [("منوی اصلی", f"{index}:home")],
+                    ]
+                ),
+            )
+            return True
+
         if text.startswith("/cancel"):
             self._clear_conversation(conversation)
             self._safe_send(chat_id, "ثبت تیکت لغو شد.", inline_keyboard([[("منوی اصلی", "h")]]))
@@ -982,4 +1252,4 @@ class TelegramBotService:
         )
         # Errors propagate so the worker can classify them: transient errors are
         # retried, unknown outcomes are not (duplicate risk).
-        adapter.send_message(chat_id, truncate(text), keyboard)
+        adapter.send_message(chat_id, truncate_html(text), keyboard)

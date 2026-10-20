@@ -23,7 +23,7 @@ const PAGE_SIZE = 20;
 function PaymentsContent() {
   const params = useSearchParams();
   const [status, setStatus] = useState(params.get("status") ?? "");
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(params.get("project_id") ?? "");
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Payment | null>(null);
@@ -150,6 +150,8 @@ function PaymentsContent() {
                     <th>پروژه</th>
                     <th>عنوان</th>
                     <th>مبلغ</th>
+                    <th>پرداخت شده</th>
+                    <th>مانده</th>
                     <th>سررسید</th>
                     <th>وضعیت</th>
                     <th>یادآوری بعدی</th>
@@ -169,6 +171,22 @@ function PaymentsContent() {
                       <td className="whitespace-nowrap text-xs">
                         {formatAmount(payment.amount_minor, payment.currency)}
                       </td>
+                      <td className="whitespace-nowrap text-xs text-muted">
+                        {payment.amount_paid_minor
+                          ? formatAmount(payment.amount_paid_minor, payment.currency)
+                          : "—"}
+                      </td>
+                      <td
+                        className={
+                          payment.remaining_minor > 0
+                            ? "whitespace-nowrap text-xs text-warning"
+                            : "whitespace-nowrap text-xs text-success"
+                        }
+                      >
+                        {payment.remaining_minor > 0
+                          ? formatAmount(payment.remaining_minor, payment.currency)
+                          : "تسویه"}
+                      </td>
                       <td className="whitespace-nowrap text-xs">{formatDate(payment.due_at)}</td>
                       <td>
                         <PaymentStatusBadge
@@ -177,7 +195,7 @@ function PaymentsContent() {
                         />
                       </td>
                       <td className="text-xs text-muted">
-                        {payment.status === "unpaid" ? (
+                        {payment.status === "unpaid" || payment.status === "partially_paid" ? (
                           payment.next_reminder_at ? (
                             formatDateTime(payment.next_reminder_at)
                           ) : (
@@ -216,6 +234,17 @@ function PaymentsContent() {
                     />
                   </div>
                   <p className="mt-2 text-sm">{formatAmount(payment.amount_minor, payment.currency)}</p>
+                  <p className="mt-1 text-[11px] text-muted">
+                    پرداخت شده:{" "}
+                    {payment.amount_paid_minor
+                      ? formatAmount(payment.amount_paid_minor, payment.currency)
+                      : "—"}
+                    {" · "}
+                    مانده:{" "}
+                    {payment.remaining_minor > 0
+                      ? formatAmount(payment.remaining_minor, payment.currency)
+                      : "تسویه"}
+                  </p>
                   <div className="mt-3">
                     <PaymentActions
                       payment={payment}

@@ -129,7 +129,14 @@ def test_notification_rejects_channels_disabled_for_the_project(admin_client: Te
 def test_feature_catalog_drives_project_toggles(admin_client: TestClient) -> None:
     catalog = admin_client.get("/api/v1/features").json()
     keys = [item["key"] for item in catalog]
-    assert keys == ["announcements", "financial", "support", "performance", "progress"]
+    assert keys == [
+        "announcements",
+        "financial",
+        "support",
+        "advisor",
+        "performance",
+        "progress",
+    ]
 
     project = create_project(admin_client)
     detail = admin_client.get(f"/api/v1/projects/{project['id']}").json()

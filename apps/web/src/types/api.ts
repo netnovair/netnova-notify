@@ -266,7 +266,7 @@ export type NotificationListItem = {
   created_at: string;
 };
 
-export type PaymentStatus = "unpaid" | "paid" | "cancelled";
+export type PaymentStatus = "unpaid" | "partially_paid" | "paid" | "cancelled";
 export type Currency = "IRR" | "IRT" | "USD" | "EUR";
 
 export type Payment = {
@@ -285,6 +285,8 @@ export type Payment = {
   updated_at: string;
   is_overdue: boolean;
   next_reminder_at: string | null;
+  amount_paid_minor: number;
+  remaining_minor: number;
 };
 
 export type AuditLog = {
@@ -462,3 +464,93 @@ export type Order = OrderListItem & {
 };
 
 export type OrderCounters = Record<OrderStatus | "total", number>;
+
+
+// ---------------------------------------------------------------------------
+// Light accounting (receipts, payment methods, templates)
+// ---------------------------------------------------------------------------
+export type CurrencyTotals = {
+  currency: Currency;
+  debt_minor: number;
+  paid_minor: number;
+  overdue_minor: number;
+  credit_minor: number;
+  balance_minor: number;
+  invoices_total: number;
+  invoices_open: number;
+  pending_receipts: number;
+  settled: boolean;
+};
+
+export type ProjectAccounting = {
+  project_id: string;
+  project_name: string;
+  totals: CurrencyTotals[];
+};
+
+export type AccountingOverview = {
+  totals: CurrencyTotals[];
+  projects: ProjectAccounting[];
+};
+
+export type PaymentMethod = {
+  id: string;
+  project_id: string | null;
+  title: string;
+  card_number: string;
+  holder_name: string;
+  bank_name: string;
+  note: string;
+  is_active: boolean;
+  order_index: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReceiptStatus = "pending" | "approved" | "rejected";
+
+export type ReceiptFile = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+};
+
+export type ReceiptAllocation = {
+  id: string;
+  payment_id: string;
+  payment_title: string | null;
+  amount_minor: number;
+};
+
+export type PaymentReceipt = {
+  id: string;
+  project_id: string;
+  project_name: string | null;
+  member_id: string | null;
+  member_display_name: string | null;
+  submitted_by_type: "employer" | "admin" | "system";
+  amount_minor: number;
+  currency: Currency;
+  tracking_code: string | null;
+  note: string;
+  status: ReceiptStatus;
+  review_note: string;
+  reviewed_at: string | null;
+  channel: string;
+  files: ReceiptFile[];
+  allocations: ReceiptAllocation[];
+  created_at: string;
+};
+
+export type MessageTemplate = {
+  key: string;
+  title: string;
+  description: string;
+  body: string;
+  default_body: string;
+  variables: string[];
+  customized: boolean;
+  project_id: string | null;
+  updated_at: string | null;
+};

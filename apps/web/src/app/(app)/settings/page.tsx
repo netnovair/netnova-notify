@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { ErrorState, InlineAlert, LoadingState } from "@/components/ui/States";
 import { InstallCard } from "@/features/pwa/InstallCard";
 import { AdminsCard } from "@/features/settings/AdminsCard";
+import { AdvisorCard } from "@/features/settings/AdvisorCard";
 import { DemoDataCard } from "@/features/settings/DemoDataCard";
 import { ChannelsCard } from "@/features/settings/ChannelsCard";
 import { PasswordCard } from "@/features/settings/PasswordCard";
@@ -256,6 +257,8 @@ export default function SettingsPage() {
             </div>
           ) : null}
         </section>
+
+        <AdvisorCard />
 
         <section className="panel p-5 lg:col-span-2">
           <div className="mb-3 flex items-center gap-2">

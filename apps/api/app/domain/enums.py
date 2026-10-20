@@ -94,8 +94,15 @@ class DeliveryStatus(StrEnum):
 
 class PaymentStatus(StrEnum):
     UNPAID = "unpaid"
+    PARTIALLY_PAID = "partially_paid"
     PAID = "paid"
     CANCELLED = "cancelled"
+
+
+class ReceiptStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 class Currency(StrEnum):
@@ -110,6 +117,9 @@ class JobKind(StrEnum):
     PAYMENT_REMINDER = "payment_reminder"
     ACTIVATION_APPROVED = "activation_approved"
     TICKET_NOTIFY = "ticket_notify"
+    RECEIPT_SUBMITTED = "receipt_submitted"
+    RECEIPT_RESULT = "receipt_result"
+    LICENSE_DELIVERY = "license_delivery"
 
 
 class JobStatus(StrEnum):

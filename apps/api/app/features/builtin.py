@@ -21,6 +21,10 @@ def _tickets(ctx: FeatureContext) -> None:
     ctx.bot.send_tickets(ctx.chat_id, ctx.member, ctx.index)
 
 
+def _advisor(ctx: FeatureContext) -> None:
+    ctx.bot.send_advisor(ctx.chat_id, ctx.member, ctx.index)
+
+
 ANNOUNCEMENTS = FeatureDefinition(
     key="announcements",
     label="اطلاعیه های من",
@@ -51,6 +55,16 @@ SUPPORT = FeatureDefinition(
     action="tickets",
 )
 
+ADVISOR = FeatureDefinition(
+    key="advisor",
+    label="مشاور هوشمند",
+    description="پاسخ کوتاه و کاربردی به سوالات آموزشی کارفرما (در حال آماده سازی)",
+    implemented=True,
+    default_enabled=True,
+    order=35,
+    action="advice",
+)
+
 PERFORMANCE = FeatureDefinition(
     key="performance",
     label="گزارش عملکرد",
@@ -76,5 +90,6 @@ def register_builtin() -> None:
     register(ANNOUNCEMENTS, _announcements)
     register(FINANCIAL, _financial)
     register(SUPPORT, _tickets)
+    register(ADVISOR, _advisor)
     register(PERFORMANCE)
     register(PROGRESS)

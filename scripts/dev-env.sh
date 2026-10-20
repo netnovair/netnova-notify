@@ -81,6 +81,12 @@ else
   echo "    .env exists, left untouched"
 fi
 
+# License codes are encrypted with their own key. Local development needs one so
+# the panel can reveal a code; it is generated once and stays in the gitignored .env.
+if ! grep -q '^LICENSE_ENCRYPTION_KEY=' .env; then
+  "$VENV/bin/python" -c "import secrets, pathlib; path = pathlib.Path('.env'); path.open('a', encoding='utf-8').write('LICENSE_ENCRYPTION_KEY=' + secrets.token_hex(32) + chr(10)); print('    added a generated LICENSE_ENCRYPTION_KEY to .env')"
+fi
+
 echo "==> 4/5 PostgreSQL (pgserver at $PGDATA)"
 if ! "$VENV/bin/python" - "$PGDATA" <<'PY' >/dev/null 2>&1
 import psycopg

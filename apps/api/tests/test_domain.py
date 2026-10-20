@@ -84,6 +84,7 @@ def test_feature_registry_and_menu() -> None:
         "announcements",
         "financial",
         "support",
+        "advisor",
         "performance",
         "progress",
     ]
@@ -94,7 +95,7 @@ def test_feature_registry_and_menu() -> None:
 
     keyboard = project_menu_buttons(0, flags)
     callbacks = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
-    assert callbacks[:3] == ["0:ann", "0:fin", "0:tickets"]
+    assert callbacks[:4] == ["0:ann", "0:fin", "0:tickets", "0:advice"]
     assert "0:soon:performance" in callbacks
     assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
 
@@ -142,3 +143,114 @@ def test_jalali_conversion_anchors() -> None:
     assert gregorian_to_jalali(2026, 10, 19) == (1405, 7, 27)
     tehran = ZoneInfo("Asia/Tehran")
     assert format_jalali_date(datetime(2026, 10, 19, 12, 0, tzinfo=tehran)) == "27 مهر 1405"
+
+
+def test_auto_allocation_is_oldest_due_first_and_never_overpays() -> None:
+    from dataclasses import dataclass
+    from datetime import UTC, datetime, timedelta
+
+    from app.domain.accounting import auto_allocate, totals_for
+
+    @dataclass
+    class Invoice:
+        id: str
+        amount_minor: int
+        amount_paid_minor: int
+        status: str
+        currency: str
+        due_at: datetime
+
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    later = Invoice("later", 3_000_000, 0, "unpaid", "IRT", now + timedelta(days=20))
+    sooner = Invoice("sooner", 2_000_000, 0, "unpaid", "IRT", now + timedelta(days=5))
+    paid = Invoice("paid", 1_000_000, 1_000_000, "paid", "IRT", now - timedelta(days=5))
+    cancelled = Invoice("cancel", 9_000_000, 0, "cancelled", "IRT", now + timedelta(days=1))
+
+    allocations, leftover = auto_allocate(4_000_000, [later, sooner, paid, cancelled])
+    assert [(row.payment_id, row.amount_minor) for row in allocations] == [
+        ("sooner", 2_000_000),
+        ("later", 2_000_000),
+    ]
+    assert leftover == 0
+
+    # Overpaying leaves the rest as credit instead of inflating an invoice.
+    allocations, leftover = auto_allocate(6_000_000, [later, sooner])
+    assert sum(row.amount_minor for row in allocations) == 5_000_000
+    assert leftover == 1_000_000
+
+    totals = totals_for([later, sooner, paid, cancelled], currency="IRT", now=now)
+    assert totals.debt_minor == 5_000_000
+    assert totals.paid_minor == 1_000_000
+    assert totals.overdue_minor == 0
+    assert totals.invoices_open == 2
+    assert totals.settled is False
+
+    # A credit larger than the debt means nothing is left to pay.
+    overpaid = totals_for([sooner], currency="IRT", now=now, credit_minor=5_000_000)
+    assert overpaid.balance_minor == 0
+    assert overpaid.settled is True
+    assert overpaid.credit_minor == 5_000_000
+
+
+def test_invoice_status_follows_allocated_amount() -> None:
+    from app.domain.accounting import invoice_remaining, invoice_status
+
+    assert invoice_remaining(5_000_000, 2_000_000) == 3_000_000
+    assert invoice_remaining(5_000_000, 7_000_000) == 0
+    assert invoice_status(5_000_000, 0, "unpaid") == "unpaid"
+    assert invoice_status(5_000_000, 2_000_000, "unpaid") == "partially_paid"
+    assert invoice_status(5_000_000, 5_000_000, "partially_paid") == "paid"
+    # A cancelled invoice never turns itself back on.
+    assert invoice_status(5_000_000, 0, "cancelled") == "cancelled"
+
+
+def test_telegram_markup_sanitizer_keeps_supported_tags_only() -> None:
+    from app.domain.telegram_html import has_markup, plain_text, sanitize_telegram_html
+
+    cleaned = sanitize_telegram_html(
+        "<b>قرارداد</b> <i>جدید</i><script>alert(1)</script> "
+        '<a href="https://example.com">لینک</a> <a href="javascript:evil()">بد</a> '
+        "<blockquote expandable>نقل</blockquote> <code>NN-1234</code>"
+    )
+    assert "<b>قرارداد</b>" in cleaned
+    assert "<i>جدید</i>" in cleaned
+    assert "<script>" not in cleaned
+    assert "&lt;script&gt;" in cleaned
+    assert 'href="https://example.com"' in cleaned
+    assert "javascript:" not in cleaned
+    assert "<blockquote expandable>نقل</blockquote>" in cleaned
+    assert "<code>NN-1234</code>" in cleaned
+    assert plain_text(cleaned).startswith("قرارداد جدید")
+    assert has_markup(cleaned) is True
+    # Plain text stays byte-identical apart from escaping.
+    assert sanitize_telegram_html("قیمت ۵۰۰ تومان & مالیات") == "قیمت ۵۰۰ تومان &amp; مالیات"
+
+
+def test_template_rendering_escapes_values_and_keeps_markup() -> None:
+    from app.domain.message_templates import render_template
+
+    rendered = render_template(
+        "<b>{project}</b>\nکد: <code>{license}</code>\n{unknown}",
+        {"project": "فروشگاه <آرمان>", "license": "NN-AAAA-BBBB"},
+    )
+    assert "<b>فروشگاه &lt;آرمان&gt;</b>" in rendered
+    assert "<code>NN-AAAA-BBBB</code>" in rendered
+    # Unknown placeholders are left for the editor to notice, never silently dropped.
+    assert "{unknown}" in rendered
+
+
+def test_sanitizer_truncation_never_splits_a_tag() -> None:
+    from app.domain.telegram_html import sanitize_telegram_html, truncate_html
+
+    long_body = "<b>" + "متن " * 400 + "</b>"
+    cut = sanitize_telegram_html(long_body, limit=200)
+    assert len(cut) <= 200
+    # Every opened tag is closed again, and no tag is cut in half.
+    assert cut.count("<b>") == cut.count("</b>")
+    assert cut.rstrip("…").rstrip().endswith("</b>")
+
+    composed = "<b>عنوان</b>\n\n" + "متن " * 500
+    trimmed = truncate_html(composed, limit=250)
+    assert len(trimmed) <= 250
+    assert trimmed.endswith("(پیام کوتاه شد)")
+    assert trimmed.count("<b>") == trimmed.count("</b>")

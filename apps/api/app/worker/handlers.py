@@ -11,16 +11,28 @@ from app.adapters.telegram.base import (
     TelegramError,
     UnknownTelegramError,
 )
+from app.adapters.telegram.formatting import inline_keyboard, url_keyboard
 from app.core.config import Settings
+from app.core.security import utcnow
+from app.domain.jalali import format_jalali_date
+from app.domain.payments import format_amount
+from app.domain.telegram_html import truncate_html
 from app.models.job import ScheduledJob
 from app.repositories.licenses import MemberRepository
 from app.repositories.notifications import NotificationRepository
+from app.services.audit import Actor, AuditService
 from app.services.licenses import LicenseService
 from app.services.notifications import NotificationService
 from app.services.payments import PaymentService
 from app.services.telegram_bot import TelegramBotService
 
 logger = logging.getLogger(__name__)
+
+
+def _membership_index(db: Session, member) -> int:
+    """Position of a member in their own project list (used in callback data)."""
+    memberships = LicenseService.access_memberships(db, member.telegram_user)
+    return next((position for position, item in enumerate(memberships) if item.id == member.id), 0)
 
 
 def handle_notification_send(
@@ -94,7 +106,12 @@ def handle_ticket_notify(
         logger.info("ticket %s no longer exists; notification skipped", raw_ticket)
         return
     project = ticket.project
-    preview = clean_for_telegram(message.body)
+    if message.author_type == "admin":
+        from app.domain.telegram_html import plain_text
+
+        preview = clean_for_telegram(plain_text(message.body))
+    else:
+        preview = clean_for_telegram(message.body)
 
     if job.payload.get("target") == "admin":
         if not settings.admin_telegram_chat_id:
@@ -108,7 +125,10 @@ def handle_ticket_notify(
             f"{preview}\n\n"
             "برای پاسخ به پنل مدیریت مراجعه کنید."
         )
-        adapter.send_message(settings.admin_telegram_chat_id, text)
+        keyboard = url_keyboard(
+            [[("پاسخ در پنل", f"{settings.next_public_site_url.rstrip('/')}/tickets")]]
+        )
+        adapter.send_message(settings.admin_telegram_chat_id, text, keyboard)
         _forward_attachments(adapter, settings.admin_telegram_chat_id, message)
         return
 
@@ -158,11 +178,210 @@ def _forward_attachments(adapter: TelegramAdapter, chat_id: int, message) -> Non
             )
 
 
+def handle_receipt_submitted(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Short admin alert for a new receipt; the review itself happens in the panel."""
+    from app.models.accounting import PaymentReceipt
+
+    raw_id = job.payload.get("receipt_id")
+    if not raw_id or not settings.admin_telegram_chat_id:
+        return
+    receipt = db.get(PaymentReceipt, uuid.UUID(str(raw_id)))
+    if receipt is None:
+        logger.info("receipt %s no longer exists; admin alert skipped", raw_id)
+        return
+    project = receipt.project
+    who = ""
+    if receipt.member is not None and receipt.member.telegram_user is not None:
+        user = receipt.member.telegram_user
+        who = " ".join(part for part in (user.first_name, user.last_name) if part) or (
+            f"@{user.username}" if user.username else str(user.telegram_id)
+        )
+    lines = [
+        "<b>رسید پرداخت جدید</b>",
+        f"پروژه: {project.name if project else '-'}",
+        f"مبلغ اعلامی: {format_amount(receipt.amount_minor, receipt.currency)}",
+    ]
+    if who:
+        lines.append(f"فرستنده: {who}")
+    if receipt.tracking_code:
+        lines.append(f"کد پیگیری: {receipt.tracking_code}")
+    if receipt.files:
+        lines.append(f"تصویر: {len(receipt.files)} فایل")
+    lines.append("")
+    lines.append("برای تایید یا رد، در پنل مدیریت بخش پرداخت ها را باز کنید.")
+    keyboard = url_keyboard(
+        [
+            [
+                (
+                    "بررسی رسید در پنل",
+                    f"{settings.next_public_site_url.rstrip('/')}/accounting?tab=receipts",
+                )
+            ]
+        ]
+    )
+    adapter.send_message(settings.admin_telegram_chat_id, "\n".join(lines), keyboard)
+    for file in receipt.files:
+        try:
+            adapter.send_media(settings.admin_telegram_chat_id, file.data, file.filename)
+        except TelegramError:
+            logger.warning("Could not forward receipt image %s", file.id)
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action="receipt.admin_notified",
+        entity_type="payment_receipt",
+        entity_id=receipt.id,
+        project_id=receipt.project_id,
+        context={"files": len(receipt.files)},
+        now=utcnow(),
+    )
+
+
+def handle_receipt_result(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Tell the employer the review result, with the updated balance."""
+    from app.models.accounting import PaymentReceipt
+    from app.services.accounting import AccountingService, TemplateService
+
+    raw_id = job.payload.get("receipt_id")
+    if not raw_id:
+        return
+    receipt = db.get(PaymentReceipt, uuid.UUID(str(raw_id)))
+    if receipt is None or receipt.member is None or receipt.member.telegram_user is None:
+        return
+    member = receipt.member
+    if member.status != "active" or member.project is None or member.project.archived_at:
+        return
+    project = member.project
+    totals = AccountingService.project_totals(db, project.id)
+    total = next((row for row in totals if row.currency == receipt.currency), None)
+    remaining = (
+        format_amount(total.balance_minor, total.currency)
+        if total is not None
+        else format_amount(0, receipt.currency)
+    )
+    status_text = "تسویه" if total is not None and total.settled else "بدهی باقی مانده"
+    approved = bool(job.payload.get("approved"))
+    values = {
+        "project": project.name,
+        "amount": format_amount(receipt.amount_minor, receipt.currency),
+        "remaining": remaining,
+        "status": status_text,
+        "reason": receipt.review_note or "بررسی تیم پشتیبانی",
+    }
+    key = "receipt_approved" if approved else "receipt_rejected"
+    text = TemplateService.render(db, key, project_id=project.id, values=values)
+    chat_id = int(member.telegram_user.telegram_id)
+    memberships = LicenseService.access_memberships(db, member.telegram_user)
+    index = next(
+        (position for position, item in enumerate(memberships) if item.id == member.id), None
+    )
+    rows: list[list[tuple[str, str]]] = []
+    if index is not None:
+        rows.append([("وضعیت مالی", f"{index}:fin")])
+        if not approved:
+            rows.append([("ثبت تیکت", f"{index}:newticket")])
+        rows.append([("منوی اصلی", f"{index}:home")])
+    keyboard = inline_keyboard(rows) if rows else None
+    adapter.send_message(chat_id, text, keyboard)
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action=f"receipt.{'approved' if approved else 'rejected'}_sent",
+        entity_type="payment_receipt",
+        entity_id=receipt.id,
+        project_id=project.id,
+        context={"chat_id": chat_id},
+        now=utcnow(),
+    )
+
+
+def handle_license_delivery(
+    db: Session, job: ScheduledJob, adapter: TelegramAdapter, settings: Settings
+) -> None:
+    """Send the license code privately to the employer's own Telegram chat.
+
+    The code is decrypted here, not stored in the job payload, so the durable
+    queue table never contains a usable license.
+    """
+    from app.core.crypto import LicenseCryptoError, decrypt_code, encryption_available
+    from app.models.license import License
+    from app.services.accounting import TemplateService
+
+    raw_license = job.payload.get("license_id")
+    raw_member = job.payload.get("member_id")
+    if not raw_license or not raw_member:
+        logger.warning("license_delivery job %s is missing identifiers", job.id)
+        return
+    license_row = db.get(License, uuid.UUID(str(raw_license)))
+    member = MemberRepository.get(db, uuid.UUID(str(raw_member)))
+    if license_row is None or member is None or member.telegram_user is None:
+        logger.info("license delivery skipped: license or member is gone")
+        return
+    if member.status != "active" or LicenseService.effective(license_row) not in {
+        "active",
+        "pending",
+    }:
+        logger.info("license delivery skipped: member inactive or license revoked/expired")
+        return
+    if member.project is None or member.project.archived_at is not None:
+        return
+    if license_row.code_encrypted is None or not encryption_available(
+        settings.license_encryption_key
+    ):
+        logger.warning("license %s cannot be decrypted (no stored code or key)", license_row.id)
+        return
+    try:
+        code = decrypt_code(license_row.code_encrypted, key=settings.license_encryption_key)
+    except LicenseCryptoError:
+        logger.exception("license %s decryption failed", license_row.id)
+        return
+    chat_id = int(member.telegram_user.telegram_id)
+    project = member.project
+    expires = (
+        format_jalali_date(license_row.expires_at, settings.tehran_timezone)
+        if license_row.expires_at
+        else "بدون تاریخ انقضا"
+    )
+    text = TemplateService.render(
+        db,
+        "license_delivery",
+        project_id=project.id,
+        values={
+            "project": project.name,
+            "name": member.telegram_user.first_name or "",
+            "license": code,
+            "due": expires,
+        },
+    )
+    adapter.send_message(
+        chat_id,
+        truncate_html(text),
+        inline_keyboard([[("بازگشت به منو", f"{_membership_index(db, member)}:home")]]),
+    )
+    AuditService.record(
+        db,
+        actor=Actor(type="system", label="worker"),
+        action="license.delivered",
+        entity_type="license",
+        entity_id=license_row.id,
+        project_id=project.id,
+        context={"chat_id": chat_id},
+        now=utcnow(),
+    )
+
+
 HANDLERS = {
+    "receipt_submitted": handle_receipt_submitted,
+    "receipt_result": handle_receipt_result,
     "notification_send": handle_notification_send,
     "payment_reminder": handle_payment_reminder,
     "activation_approved": handle_activation_approved,
     "ticket_notify": handle_ticket_notify,
+    "license_delivery": handle_license_delivery,
 }
 
 

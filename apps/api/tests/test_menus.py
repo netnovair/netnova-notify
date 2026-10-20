@@ -62,15 +62,33 @@ def test_financial_menu_shows_open_payments(admin_client: TestClient, mock_adapt
     assert payment.status_code == 201, payment.text
     telegram_update(admin_client, telegram_id=850003, callback_data="0:fin")
     text = last_message(mock_adapter)["text"]
+    # The financial menu is a balance summary, not a list of raw invoices.
+    assert "وضعیت مالی" in text
+    assert "بدهی" in text
+    assert "3,200,000 تومان" in text
+    assert "مانده حساب" in text
+    buttons = [
+        button["text"]
+        for row in last_message(mock_adapter)["keyboard"]["inline_keyboard"]
+        for button in row
+    ]
+    assert "ارسال رسید" in buttons
+    assert "سوابق واریز" in buttons
+
+    # The invoice list stays available behind its own button.
+    telegram_update(admin_client, telegram_id=850003, callback_data="0:rinv")
+    text = last_message(mock_adapter)["text"]
     assert "پرداخت طراحی" in text
     assert "3,200,000 تومان" in text
-    assert "تایید تراکنش بانکی" in text
 
 
 def test_financial_empty_state(admin_client: TestClient, mock_adapter) -> None:
     _employer(admin_client, 850004)
     telegram_update(admin_client, telegram_id=850004, callback_data="0:fin")
-    assert "هیچ پرداخت بازی ثبت نشده است" in last_message(mock_adapter)["text"]
+    text = last_message(mock_adapter)["text"]
+    assert "هنوز فاکتوری ثبت نشده است" in text
+    # No invoice at all must not be reported as a settled balance.
+    assert "تسویه" not in text
 
 
 def test_coming_soon_features_are_explicit(admin_client: TestClient, mock_adapter) -> None:

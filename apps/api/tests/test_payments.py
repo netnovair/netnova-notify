@@ -178,7 +178,9 @@ def test_worker_sends_financial_reminder(admin_client: TestClient, mock_adapter)
     assert reminders, mock_adapter.sent
     text = reminders[-1]
     assert "2,500,000 تومان" in text
-    assert "پرداخت نشده" in text
+    # The reminder text comes from the editable template, not a hard-coded string.
+    assert "یادآوری پرداخت برای پروژه" in text
+    assert "ارسال رسید" in text
     assert "تایید تراکنش بانکی" in text
 
     with SessionLocal() as db:
