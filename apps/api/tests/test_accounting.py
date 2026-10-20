@@ -511,3 +511,26 @@ def test_receipt_with_photo_notifies_admin_with_the_image(
         if message["chat_id"] == 555001 and message.get("media")
     ]
     assert media, "the receipt image must be forwarded to the admin chat"
+
+
+def test_allocated_invoice_cannot_be_cancelled(admin_client: TestClient) -> None:
+    project = _employer(admin_client, 860014, name="پروژه فاکتور تخصیصی")
+    invoice = _invoice(admin_client, project["id"], amount_minor=1_000_000)
+    receipt = _receipt(admin_client, project["id"], amount=1_000_000)
+    approved = admin_client.post(f"/api/v1/accounting/receipts/{receipt['id']}/approve")
+    assert approved.status_code == 200, approved.text
+
+    blocked = admin_client.post(f"/api/v1/payments/{invoice['id']}/cancel")
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "payment_has_allocations"
+
+    # The guard is specific to allocated invoices: a fresh one still cancels,
+    # and a cancelled invoice is never counted as debt again.
+    other = _invoice(admin_client, project["id"], amount_minor=500_000)
+    cancelled = admin_client.post(f"/api/v1/payments/{other['id']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["remaining_minor"] == 0
+    assert cancelled.json()["status"] == "cancelled"
+
+    totals = admin_client.get(f"/api/v1/accounting/projects/{project['id']}/totals").json()
+    assert totals["totals"][0]["debt_minor"] == 0

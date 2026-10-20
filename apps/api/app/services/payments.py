@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -154,7 +155,21 @@ class PaymentService:
 
     @staticmethod
     def cancel(db: Session, *, payment: Payment, actor: Actor) -> Payment:
+        from app.models.accounting import PaymentAllocation
+
         now = utcnow()
+        allocated = db.scalar(
+            select(func.count(PaymentAllocation.id)).where(
+                PaymentAllocation.payment_id == payment.id
+            )
+        )
+        if allocated:
+            # Cancelling would orphan an approved receipt allocation; make the
+            # administrator move the money first instead of losing the record.
+            raise conflict(
+                "این فاکتور تخصیص رسید دارد. ابتدا تخصیص رسید را ویرایش یا حذف کنید.",
+                code="payment_has_allocations",
+            )
         if payment.status == PaymentStatus.PAID.value:
             raise conflict("پرداخت تسویه شده قابل لغو نیست.")
         if payment.status == PaymentStatus.CANCELLED.value:

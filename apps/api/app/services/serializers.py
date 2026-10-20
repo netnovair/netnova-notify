@@ -244,7 +244,12 @@ def payment_out(
         title=payment.title,
         amount_minor=payment.amount_minor,
         amount_paid_minor=payment.amount_paid_minor,
-        remaining_minor=max(0, payment.amount_minor - payment.amount_paid_minor),
+        # A cancelled invoice is not a debt, so it never shows a remaining amount.
+        remaining_minor=(
+            0
+            if payment.status == "cancelled"
+            else max(0, payment.amount_minor - payment.amount_paid_minor)
+        ),
         currency=payment.currency,
         due_at=payment.due_at,
         status=payment.status,
