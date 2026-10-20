@@ -474,3 +474,40 @@ def test_payment_reminder_carries_the_receipt_button(
         for button in row
     ]
     assert any(callback.endswith(":rnew") for callback in callbacks)
+
+
+def test_receipt_with_photo_notifies_admin_with_the_image(
+    admin_client: TestClient, mock_adapter, monkeypatch
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "admin_telegram_chat_id", 555001)
+    project = _employer(admin_client, 860013, name="پروژه تصویر رسید")
+    _invoice(admin_client, project["id"], amount_minor=3_000_000)
+
+    telegram_update(admin_client, telegram_id=860013, callback_data="0:rnew")
+    telegram_update(admin_client, telegram_id=860013, text="1500000")
+    telegram_update(admin_client, telegram_id=860013, text="/skip")
+    # The photo's caption becomes the receipt note.
+    telegram_update(admin_client, telegram_id=860013, photo=True, text="واریز از کارت خودم")
+
+    with SessionLocal() as db:
+        receipt = db.query(PaymentReceipt).one()
+        assert receipt.status == "pending"
+        assert receipt.note == "واریز از کارت خودم"
+        assert len(receipt.files) == 1
+
+    run_worker(mock_adapter)
+    alerts = [
+        message
+        for message in mock_adapter.sent
+        if message["chat_id"] == 555001 and "رسید پرداخت جدید" in message["text"]
+    ]
+    assert alerts, [(m["chat_id"], m["text"][:40]) for m in mock_adapter.sent]
+    assert "1,500,000 تومان" in alerts[-1]["text"]
+    media = [
+        message
+        for message in mock_adapter.sent
+        if message["chat_id"] == 555001 and message.get("media")
+    ]
+    assert media, "the receipt image must be forwarded to the admin chat"

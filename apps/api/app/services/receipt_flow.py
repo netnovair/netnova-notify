@@ -212,14 +212,15 @@ class ReceiptFlow:
             return True
         return False
 
-    def handle_image(self, conversation, image: tuple[str, str, str]) -> bool:
+    def handle_image(self, conversation, image: tuple[str, str, str], *, caption: str = "") -> bool:
         if conversation.step != STEP_NOTE:
             return False
         attachment = self.bot._download_image(self.chat_id, image)
         if attachment is None:
             return True
         payload = dict(conversation.payload or {})
-        payload["note"] = payload.get("note") or "رسید تصویری"
+        # A caption typed with the photo doubles as the receipt note.
+        payload["note"] = (caption or payload.get("note") or "").strip()[:2000] or "رسید تصویری"
         self._submit(payload, attachments=[attachment])
         return True
 

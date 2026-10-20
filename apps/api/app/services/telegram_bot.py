@@ -211,7 +211,8 @@ class TelegramBotService:
             self._safe_send(
                 chat_id,
                 "برای ارسال تصویر، ابتدا از منوی «تیکت ها» یک تیکت باز کنید یا پاسخ "
-                "همان تیکت را بزنید؛ سپس تصویر را همراه متن یا به تنهایی بفرستید.",
+                "همان تیکت را بزنید، یا در بخش «وضعیت مالی» گزینه «ارسال رسید» را انتخاب "
+                "کنید؛ سپس تصویر را همراه متن یا به تنهایی بفرستید.",
                 inline_keyboard([[("منوی اصلی", "h")]]),
             )
 
@@ -841,7 +842,7 @@ class TelegramBotService:
                 self,
             )
             if image is not None:
-                return flow.handle_image(conversation, image)
+                return flow.handle_image(conversation, image, caption=text)
             return flow.handle_text(conversation, text)
 
         if conversation.step == STEP_ADVISOR:
