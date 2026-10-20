@@ -423,3 +423,54 @@ def test_cancelled_invoice_leaves_the_debt(admin_client: TestClient) -> None:
     totals = _totals(admin_client, project["id"])
     assert totals["debt_minor"] == 0
     assert totals["settled"] is True
+
+
+def test_pushed_announcement_carries_a_shortcut_button(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    project = _employer(admin_client, 860011, name="پروژه اطلاعیه")
+    created = admin_client.post(
+        f"/api/v1/projects/{project['id']}/notifications",
+        json={"title": "تحویل نسخه اول", "body": "نسخه اول آماده بازبینی است."},
+    )
+    assert created.status_code == 201, created.text
+
+    run_worker(mock_adapter)
+    pushed = [
+        message
+        for message in mock_adapter.sent
+        if "تحویل نسخه اول" in message["text"] and message.get("keyboard")
+    ]
+    assert pushed, [message["text"] for message in mock_adapter.sent]
+    callbacks = [
+        button["callback_data"]
+        for row in pushed[-1]["keyboard"]["inline_keyboard"]
+        for button in row
+    ]
+    assert any(callback.endswith(":ann") for callback in callbacks)
+    assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
+
+
+def test_payment_reminder_carries_the_receipt_button(
+    admin_client: TestClient, mock_adapter
+) -> None:
+    project = _employer(admin_client, 860012, name="پروژه یادآوری")
+    _invoice(
+        admin_client,
+        project["id"],
+        amount_minor=1_000_000,
+        due_at=(utcnow() + timedelta(days=3)).isoformat(),
+    )
+    run_worker(mock_adapter)
+    reminders = [
+        message
+        for message in mock_adapter.sent
+        if "یادآوری پرداخت" in message["text"] and message.get("keyboard")
+    ]
+    assert reminders, [message["text"] for message in mock_adapter.sent]
+    callbacks = [
+        button["callback_data"]
+        for row in reminders[-1]["keyboard"]["inline_keyboard"]
+        for button in row
+    ]
+    assert any(callback.endswith(":rnew") for callback in callbacks)

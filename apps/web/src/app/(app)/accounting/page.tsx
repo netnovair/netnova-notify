@@ -1,6 +1,7 @@
 "use client";
 
 import { CreditCard, FileText, Landmark, ReceiptText } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -23,7 +24,13 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 
 function AccountingContent() {
-  const [tab, setTab] = useState<TabKey>("overview");
+  const params = useSearchParams();
+  const initialTab = params.get("tab");
+  const [tab, setTab] = useState<TabKey>(
+    initialTab === "receipts" || initialTab === "cards" || initialTab === "templates"
+      ? initialTab
+      : "overview",
+  );
   const [refreshKey, setRefreshKey] = useState(0);
 
   const projects = useApiData<Page<ProjectListItem>>(
