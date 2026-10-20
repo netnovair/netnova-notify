@@ -281,7 +281,7 @@ class PaymentService:
         if notification is None:
             from app.models.notification import Notification
 
-            body = PaymentService._reminder_body(payment)
+            body = PaymentService._reminder_body(db, payment, project)
             notification = Notification(
                 project_id=project.id,
                 type=NotificationType.FINANCIAL.value,
@@ -316,14 +316,28 @@ class PaymentService:
             db.flush()
 
     @staticmethod
-    def _reminder_body(payment: Payment) -> str:
+    def _reminder_body(db: Session, payment: Payment, project: Project) -> str:
+        """Render the editable ``payment_reminder`` template (project > global > default)."""
+        from app.domain.accounting import invoice_remaining
+        from app.services.accounting import TemplateService
+
         settings = get_settings()
+        remaining = invoice_remaining(payment.amount_minor, payment.amount_paid_minor)
+        text = TemplateService.render(
+            db,
+            "payment_reminder",
+            project_id=payment.project_id,
+            values={
+                "project": project.name,
+                "name": project.client_name or "",
+                "amount": format_amount(payment.amount_minor, payment.currency),
+                "due": format_jalali_date(payment.due_at, settings.tehran_timezone),
+                "remaining": format_amount(remaining, payment.currency),
+            },
+        )
         notes = f"\nتوضیحات: {payment.notes}" if payment.notes else ""
         return (
-            f"مبلغ: {format_amount(payment.amount_minor, payment.currency)}\n"
-            f"سررسید: {format_jalali_date(payment.due_at, settings.tehran_timezone)}\n"
-            "وضعیت: پرداخت نشده"
-            f"{notes}\n\n"
+            f"{text}{notes}\n\n"
             "این پیام فقط برای اطلاع رسانی وضعیت مالی است و به معنای تایید تراکنش بانکی نیست."
         )
 
