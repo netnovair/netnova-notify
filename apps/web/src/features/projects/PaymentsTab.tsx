@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus, Wallet } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
@@ -14,7 +15,6 @@ import { api, queryString } from "@/lib/api";
 import { formatAmount, formatDate, formatDateTime } from "@/lib/format";
 import { PAYMENT_STATUS } from "@/lib/labels";
 import { useApiData } from "@/lib/hooks";
-import Link from "next/link";
 
 import type {
   Currency,
