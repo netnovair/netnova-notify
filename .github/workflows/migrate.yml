@@ -1,8 +1,12 @@
 name: Migrate database
 
 # Render's free tier has no shell and no one-off jobs, so schema changes are
-# applied from a GitHub runner against the production database. Run this right
-# after a release that adds migrations, before relying on the new code.
+# applied from a GitHub runner against the production database.
+#
+# * `push` to main that adds/changes a revision applies `alembic upgrade head`
+#   automatically, so a release never runs ahead of its schema.
+# * `workflow_dispatch` can also inspect the live revision (`current`) or verify
+#   that models and database agree (`check`).
 on:
   workflow_dispatch:
     inputs:
@@ -14,6 +18,10 @@ on:
         description: "Target revision for upgrade (empty = head)"
         required: false
         default: ""
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/alembic/versions/**"
 
 concurrency:
   group: migrate-database
@@ -40,6 +48,7 @@ jobs:
           ENVIRONMENT: development
           TELEGRAM_ADAPTER: mock
           COOKIE_SECURE: "false"
+          ACTION: ${{ inputs.action || 'upgrade' }}
           REV: ${{ inputs.revision }}
         run: |
           set -euo pipefail
@@ -47,9 +56,10 @@ jobs:
             echo "DATABASE_URL secret is not set." >&2
             exit 1
           fi
-          case "${{ inputs.action }}" in
-            upgrade) alembic upgrade "${REV:-head}" ;;
+          echo "Running: alembic ${ACTION} ${REV}"
+          case "$ACTION" in
+            upgrade) alembic upgrade "${REV:-head}"; alembic current -v ;;
             current) alembic current -v ;;
             check) alembic check ;;
-            *) echo "Unknown action: ${{ inputs.action }}" >&2; exit 1 ;;
+            *) echo "Unknown action: $ACTION" >&2; exit 1 ;;
           esac
